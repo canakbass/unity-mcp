@@ -527,6 +527,134 @@ tool(
   "assign_animator_controller"
 );
 
+// ---------------- v4: ANIMATOR (blend tree / sub-state machine) ----------------
+tool(
+  "unity_create_blend_tree",
+  "Var olan bir Animator Controller'a blend tree'li bir state ekler. blendType='Simple1D' (tek parametre) ya da 2D varyantlari. Eksik blend parametreleri Float olarak otomatik eklenir.",
+  {
+    controllerPath: z.string().describe("orn: 'Assets/Animators/Hero.controller'"),
+    name: z.string().optional().describe("State adi (varsayilan 'BlendTree')"),
+    layer: z.number().optional(),
+    blendType: z.enum(["Simple1D", "SimpleDirectional2D", "FreeformDirectional2D", "FreeformCartesian2D", "Direct"]).optional(),
+    blendParameter: z.string().optional().describe("1D icin blend parametresi (varsayilan 'Blend')"),
+    blendParameterX: z.string().optional().describe("2D X parametresi"),
+    blendParameterY: z.string().optional().describe("2D Y parametresi"),
+    default: z.boolean().optional().describe("Bu state default olsun mu"),
+    children: z.array(z.object({
+      clip: z.string().describe("AnimationClip asset yolu"),
+      threshold: z.number().optional().describe("1D esik degeri"),
+      x: z.number().optional().describe("2D X konumu"),
+      y: z.number().optional().describe("2D Y konumu"),
+    })).optional(),
+  },
+  "create_blend_tree"
+);
+
+tool(
+  "unity_add_animator_sub_state_machine",
+  "Bir Animator Controller'in katmanina alt-state machine ekler (kendi state'leri, default'u ve ic gecisleriyle).",
+  {
+    controllerPath: z.string(),
+    name: z.string().optional().describe("Alt-state machine adi"),
+    layer: z.number().optional(),
+    states: z.array(z.object({
+      name: z.string(),
+      clip: z.string().optional(),
+      default: z.boolean().optional(),
+    })).optional(),
+    transitions: z.array(z.object({
+      from: z.string(),
+      to: z.string(),
+      hasExitTime: z.boolean().optional(),
+      exitTime: z.number().optional(),
+      condition: z.object({
+        parameter: z.string(),
+        mode: z.enum(["If", "IfNot", "Greater", "Less", "Equals", "NotEqual"]),
+        threshold: z.number().optional(),
+      }).optional(),
+    })).optional(),
+  },
+  "add_animator_sub_state_machine"
+);
+
+// ---------------- v4: RULE TILE ----------------
+tool(
+  "unity_create_rule_tile",
+  "Otomatik-döşenen (auto-tiling) bir RuleTile asset'i olusturur. com.unity.2d.tilemap.extras paketi gerekir. Her kural: bir sprite + 8 komsu maskesi (0=herhangi, 1=bu tile olmali, 2=bu tile olmamali).",
+  {
+    assetPath: z.string().describe("orn: 'Tiles/GroundRule' (.asset otomatik)"),
+    defaultSprite: z.string().optional().describe("Hicbir kural uymazsa kullanilacak sprite"),
+    rules: z.array(z.object({
+      sprite: z.string().describe("Bu kural uydugunda gosterilecek sprite"),
+      neighbors: z.array(z.number()).length(8).describe("8 komsu: [SolUst, Ust, SagUst, Sol, Sag, SolAlt, Alt, SagAlt] — her biri 0/1/2"),
+    })).optional(),
+  },
+  "create_rule_tile"
+);
+
+// ---------------- v4: PARTICLE SYSTEM ----------------
+tool(
+  "unity_create_particle_system",
+  "Yeni bir ParticleSystem olusturur (ya da var olan nesneye ekler) ve yaygin ayarlari yapar. instanceId/path verilirse o nesneye eklenir; yoksa yeni GameObject olusturulur.",
+  {
+    name: z.string().optional(),
+    instanceId: z.number().optional(),
+    path: z.string().optional(),
+    duration: z.number().optional(),
+    looping: z.boolean().optional(),
+    startLifetime: z.number().optional(),
+    startSpeed: z.number().optional(),
+    startSize: z.number().optional(),
+    startColor: z.array(z.number()).min(3).max(4).optional().describe("[r,g,b] veya [r,g,b,a]"),
+    gravityModifier: z.number().optional(),
+    maxParticles: z.number().optional(),
+    rateOverTime: z.number().optional().describe("Saniyede emit edilen parcacik sayisi"),
+    shapeType: z.enum(["Sphere", "Hemisphere", "Cone", "Box", "Circle", "Edge", "Rectangle"]).optional(),
+    material: z.string().optional().describe("Material asset yolu"),
+  },
+  "create_particle_system"
+);
+
+// ---------------- v4: TERRAIN ----------------
+tool(
+  "unity_create_terrain",
+  "Yeni bir Terrain (+ TerrainData asset) olusturur.",
+  {
+    assetPath: z.string().optional().describe("TerrainData yolu (varsayilan 'Terrain/TerrainData')"),
+    name: z.string().optional(),
+    heightmapResolution: z.number().optional().describe("2^n+1 olmali (33, 65, …, 513, 1025). Varsayilan 513"),
+    width: z.number().optional().describe("Varsayilan 500"),
+    height: z.number().optional().describe("Maksimum yukseklik, varsayilan 600"),
+    length: z.number().optional().describe("Varsayilan 500"),
+  },
+  "create_terrain"
+);
+
+tool(
+  "unity_set_terrain_heights",
+  "Bir Terrain'in yukseklik haritasini ayarlar. uniform: tum arazi tek yukseklik (0-1). heights: 2B normalize dizi (0-1), arazi cozunurlugune yeniden orneklenir.",
+  {
+    instanceId: z.number().optional(),
+    path: z.string().optional(),
+    uniform: z.number().optional().describe("0-1 arasi duz yukseklik"),
+    heights: z.array(z.array(z.number())).optional().describe("2B yukseklik dizisi (her deger 0-1)"),
+  },
+  "set_terrain_heights"
+);
+
+tool(
+  "unity_add_terrain_layer",
+  "Bir Terrain'e texture katmani (TerrainLayer) ekler.",
+  {
+    instanceId: z.number().optional(),
+    path: z.string().optional(),
+    texture: z.string().describe("Diffuse texture asset yolu"),
+    assetPath: z.string().optional().describe("TerrainLayer yolu (varsayilan 'Terrain/Layer')"),
+    tileSize: z.array(z.number()).length(2).optional().describe("[x,y] döşeme boyutu"),
+  },
+  "add_terrain_layer"
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 console.error(`[unity-mcp] hazir — Unity: ${UNITY_HOST}:${UNITY_PORT}`);

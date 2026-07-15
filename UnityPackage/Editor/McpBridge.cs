@@ -220,6 +220,17 @@ namespace McpUnity
                 case "create_animation_clip": return CreateAnimationClip(p);
                 case "create_animator_controller": return CreateAnimatorController(p);
                 case "assign_animator_controller": return AssignAnimatorController(p);
+                // ---- v4: Animator (blend tree / sub-state machine) ----
+                case "create_blend_tree": return CreateBlendTree(p);
+                case "add_animator_sub_state_machine": return AddAnimatorSubStateMachine(p);
+                // ---- v4: Rule tile ----
+                case "create_rule_tile": return CreateRuleTile(p);
+                // ---- v4: Particle system ----
+                case "create_particle_system": return CreateParticleSystem(p);
+                // ---- v4: Terrain ----
+                case "create_terrain": return CreateTerrain(p);
+                case "set_terrain_heights": return SetTerrainHeights(p);
+                case "add_terrain_layer": return AddTerrainLayer(p);
                 default: throw new Exception("Bilinmeyen method: " + method);
             }
         }
@@ -1266,6 +1277,270 @@ namespace McpUnity
             EditorUtility.SetDirty(anim);
             EditorSceneManager.MarkSceneDirty(go.scene);
             return new JObject { ["object"] = go.name, ["controller"] = AssetDatabase.GetAssetPath(ctrl) };
+        }
+
+        // =====================================================================
+        //  v4: ANIMATOR — BLEND TREE / SUB-STATE MACHINE
+        // =====================================================================
+        static AnimatorController LoadController(JObject p)
+        {
+            var ctrl = AssetDatabase.LoadAssetAtPath<AnimatorController>((string)p["controllerPath"]);
+            if (ctrl == null) throw new Exception("Animator Controller bulunamadi: " + p["controllerPath"]);
+            return ctrl;
+        }
+
+        static void EnsureFloatParam(AnimatorController ctrl, string name)
+        {
+            if (string.IsNullOrEmpty(name)) return;
+            if (!ctrl.parameters.Any(x => x.name == name)) ctrl.AddParameter(name, AnimatorControllerParameterType.Float);
+        }
+
+        static JToken CreateBlendTree(JObject p)
+        {
+            var ctrl = LoadController(p);
+            int layer = Has(p, "layer") ? (int)p["layer"] : 0;
+            var type = (BlendTreeType)Enum.Parse(typeof(BlendTreeType), Has(p, "blendType") ? (string)p["blendType"] : "Simple1D", true);
+
+            BlendTree tree;
+            var state = ctrl.CreateBlendTreeInController((string)p["name"] ?? "BlendTree", out tree, layer);
+            tree.blendType = type;
+            if (type == BlendTreeType.Simple1D)
+            {
+                string bp = (string)p["blendParameter"] ?? "Blend";
+                EnsureFloatParam(ctrl, bp); tree.blendParameter = bp;
+            }
+            else
+            {
+                string bpx = (string)p["blendParameterX"] ?? "X";
+                string bpy = (string)p["blendParameterY"] ?? "Y";
+                EnsureFloatParam(ctrl, bpx); EnsureFloatParam(ctrl, bpy);
+                tree.blendParameter = bpx; tree.blendParameterY = bpy;
+            }
+            if (p["children"] is JArray children)
+                foreach (var chTok in children)
+                {
+                    var ch = (JObject)chTok;
+                    var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>((string)ch["clip"]);
+                    if (clip == null) throw new Exception("Clip bulunamadi: " + ch["clip"]);
+                    if (type == BlendTreeType.Simple1D)
+                        tree.AddChild(clip, Has(ch, "threshold") ? (float)ch["threshold"] : 0f);
+                    else
+                        tree.AddChild(clip, new Vector2(Has(ch, "x") ? (float)ch["x"] : 0f, Has(ch, "y") ? (float)ch["y"] : 0f));
+                }
+            if (Has(p, "default") && (bool)p["default"]) ctrl.layers[layer].stateMachine.defaultState = state;
+            AssetDatabase.SaveAssets();
+            return new JObject { ["controller"] = AssetDatabase.GetAssetPath(ctrl), ["state"] = state.name, ["children"] = tree.children.Length };
+        }
+
+        static JToken AddAnimatorSubStateMachine(JObject p)
+        {
+            var ctrl = LoadController(p);
+            int layer = Has(p, "layer") ? (int)p["layer"] : 0;
+            var root = ctrl.layers[layer].stateMachine;
+            var ssm = root.AddStateMachine((string)p["name"] ?? "SubStateMachine");
+
+            var stateMap = new Dictionary<string, AnimatorState>();
+            AnimatorState defState = null;
+            if (p["states"] is JArray states)
+                foreach (var stTok in states)
+                {
+                    var st = (JObject)stTok;
+                    string sname = (string)st["name"];
+                    var state = ssm.AddState(sname);
+                    if (Has(st, "clip"))
+                    {
+                        var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>((string)st["clip"]);
+                        if (clip == null) throw new Exception("Clip bulunamadi: " + st["clip"]);
+                        state.motion = clip;
+                    }
+                    stateMap[sname] = state;
+                    if (defState == null || (Has(st, "default") && (bool)st["default"])) defState = state;
+                }
+            if (defState != null) ssm.defaultState = defState;
+
+            if (p["transitions"] is JArray trs)
+                foreach (var trTok in trs)
+                {
+                    var tr = (JObject)trTok;
+                    if (!stateMap.TryGetValue((string)tr["from"], out var from) || !stateMap.TryGetValue((string)tr["to"], out var to))
+                        throw new Exception("Gecis state'i bulunamadi: " + tr["from"] + " -> " + tr["to"]);
+                    var t = from.AddTransition(to);
+                    t.hasExitTime = Has(tr, "hasExitTime") && (bool)tr["hasExitTime"];
+                    if (Has(tr, "exitTime")) { t.hasExitTime = true; t.exitTime = (float)tr["exitTime"]; }
+                    if (tr["condition"] is JObject cond)
+                    {
+                        var mode = (AnimatorConditionMode)Enum.Parse(typeof(AnimatorConditionMode), (string)cond["mode"], true);
+                        t.AddCondition(mode, Has(cond, "threshold") ? (float)cond["threshold"] : 0f, (string)cond["parameter"]);
+                    }
+                }
+            AssetDatabase.SaveAssets();
+            return new JObject { ["controller"] = AssetDatabase.GetAssetPath(ctrl), ["subStateMachine"] = ssm.name, ["states"] = stateMap.Count };
+        }
+
+        // =====================================================================
+        //  v4: RULE TILE (com.unity.2d.tilemap.extras gerektirir; reflection ile)
+        // =====================================================================
+        static JToken CreateRuleTile(JObject p)
+        {
+            var rtType = FindAnyType("RuleTile", typeof(ScriptableObject)); // paket yoksa net hata verir
+            var rt = ScriptableObject.CreateInstance(rtType);
+            var so = new SerializedObject(rt);
+
+            if (Has(p, "defaultSprite"))
+            {
+                var defSprite = LoadAssetSmart((string)p["defaultSprite"], "PPtr<$Sprite>") as Sprite;
+                var dsp = so.FindProperty("m_DefaultSprite");
+                if (dsp != null) dsp.objectReferenceValue = defSprite;
+            }
+
+            int ruleCount = 0;
+            if (p["rules"] is JArray rules)
+            {
+                // 8 komsu yonu (sol-ust -> sag-alt, merkez haric)
+                var dirs = new[]
+                {
+                    new Vector3Int(-1, 1, 0), new Vector3Int(0, 1, 0), new Vector3Int(1, 1, 0),
+                    new Vector3Int(-1, 0, 0),                          new Vector3Int(1, 0, 0),
+                    new Vector3Int(-1, -1, 0), new Vector3Int(0, -1, 0), new Vector3Int(1, -1, 0)
+                };
+                var rulesProp = so.FindProperty("m_TilingRules");
+                if (rulesProp == null) throw new Exception("RuleTile.m_TilingRules bulunamadi (paket surumu farkli olabilir).");
+                rulesProp.arraySize = rules.Count;
+                for (int i = 0; i < rules.Count; i++)
+                {
+                    var rule = (JObject)rules[i];
+                    var rp = rulesProp.GetArrayElementAtIndex(i);
+                    var sprite = LoadAssetSmart((string)rule["sprite"], "PPtr<$Sprite>") as Sprite;
+                    var spritesProp = rp.FindPropertyRelative("m_Sprites");
+                    spritesProp.arraySize = 1;
+                    spritesProp.GetArrayElementAtIndex(0).objectReferenceValue = sprite;
+
+                    var neighborsProp = rp.FindPropertyRelative("m_Neighbors");
+                    var posProp = rp.FindPropertyRelative("m_NeighborPositions");
+                    var mask = rule["neighbors"] as JArray; // 8 deger: 0=herhangi, 1=bu tile, 2=bu-degil
+                    var usedN = new List<int>();
+                    var usedP = new List<Vector3Int>();
+                    if (mask != null)
+                        for (int n = 0; n < 8 && n < mask.Count; n++)
+                        {
+                            int v = (int)mask[n];
+                            if (v != 0) { usedN.Add(v); usedP.Add(dirs[n]); }
+                        }
+                    neighborsProp.arraySize = usedN.Count;
+                    posProp.arraySize = usedN.Count;
+                    for (int n = 0; n < usedN.Count; n++)
+                    {
+                        neighborsProp.GetArrayElementAtIndex(n).intValue = usedN[n];
+                        posProp.GetArrayElementAtIndex(n).vector3IntValue = usedP[n];
+                    }
+                }
+                ruleCount = rules.Count;
+            }
+            so.ApplyModifiedProperties();
+            string path = NormalizeAssetPath((string)p["assetPath"], ".asset");
+            AssetDatabase.CreateAsset(rt, path);
+            AssetDatabase.SaveAssets();
+            return new JObject { ["path"] = path, ["type"] = rtType.FullName, ["rules"] = ruleCount };
+        }
+
+        // =====================================================================
+        //  v4: PARTICLE SYSTEM
+        // =====================================================================
+        static JToken CreateParticleSystem(JObject p)
+        {
+            GameObject go;
+            if (Has(p, "instanceId") || Has(p, "path")) go = ResolveGameObject(p);
+            else { go = new GameObject((string)p["name"] ?? "Particle System"); Undo.RegisterCreatedObjectUndo(go, "MCP Particle"); }
+            var ps = go.GetComponent<ParticleSystem>();
+            if (ps == null) ps = go.AddComponent<ParticleSystem>();
+
+            var main = ps.main;
+            if (Has(p, "duration")) main.duration = (float)p["duration"];
+            if (Has(p, "looping")) main.loop = (bool)p["looping"];
+            if (Has(p, "startLifetime")) main.startLifetime = (float)p["startLifetime"];
+            if (Has(p, "startSpeed")) main.startSpeed = (float)p["startSpeed"];
+            if (Has(p, "startSize")) main.startSize = (float)p["startSize"];
+            if (Has(p, "gravityModifier")) main.gravityModifier = (float)p["gravityModifier"];
+            if (Has(p, "maxParticles")) main.maxParticles = (int)p["maxParticles"];
+            if (Has(p, "startColor")) { var c = p["startColor"]; main.startColor = new Color((float)c[0], (float)c[1], (float)c[2], c.Count() > 3 ? (float)c[3] : 1f); }
+            if (Has(p, "rateOverTime")) { var em = ps.emission; em.rateOverTime = (float)p["rateOverTime"]; }
+            if (Has(p, "shapeType")) { var sh = ps.shape; sh.shapeType = (ParticleSystemShapeType)Enum.Parse(typeof(ParticleSystemShapeType), (string)p["shapeType"], true); }
+            if (Has(p, "material"))
+            {
+                var mat = AssetDatabase.LoadAssetAtPath<Material>((string)p["material"]);
+                var r = go.GetComponent<ParticleSystemRenderer>();
+                if (mat != null && r != null) r.sharedMaterial = mat;
+            }
+            EditorSceneManager.MarkSceneDirty(go.scene);
+            return new JObject { ["name"] = go.name, ["instanceId"] = GetIID(go) };
+        }
+
+        // =====================================================================
+        //  v4: TERRAIN
+        // =====================================================================
+        static JToken CreateTerrain(JObject p)
+        {
+            var data = new TerrainData { heightmapResolution = Has(p, "heightmapResolution") ? (int)p["heightmapResolution"] : 513 };
+            float w = Has(p, "width") ? (float)p["width"] : 500f;
+            float h = Has(p, "height") ? (float)p["height"] : 600f;
+            float len = Has(p, "length") ? (float)p["length"] : 500f;
+            data.size = new Vector3(w, h, len);
+            string dataPath = NormalizeAssetPath(Has(p, "assetPath") ? (string)p["assetPath"] : "Terrain/TerrainData", ".asset");
+            AssetDatabase.CreateAsset(data, dataPath);
+            var go = Terrain.CreateTerrainGameObject(data);
+            if (Has(p, "name")) go.name = (string)p["name"];
+            Undo.RegisterCreatedObjectUndo(go, "MCP Terrain");
+            AssetDatabase.SaveAssets();
+            EditorSceneManager.MarkSceneDirty(go.scene);
+            return new JObject { ["name"] = go.name, ["instanceId"] = GetIID(go), ["dataPath"] = dataPath };
+        }
+
+        static JToken SetTerrainHeights(JObject p)
+        {
+            var go = ResolveGameObject(p);
+            var terrain = go.GetComponent<Terrain>();
+            if (terrain == null || terrain.terrainData == null) throw new Exception("Nesnede Terrain (veya TerrainData) yok.");
+            var data = terrain.terrainData;
+            int res = data.heightmapResolution;
+            var heights = new float[res, res];
+            if (Has(p, "uniform"))
+            {
+                float u = (float)p["uniform"];
+                for (int y = 0; y < res; y++) for (int x = 0; x < res; x++) heights[y, x] = u;
+            }
+            else if (p["heights"] is JArray rows && rows.Count > 0)
+            {
+                int rh = rows.Count;
+                for (int y = 0; y < res; y++)
+                {
+                    var row = rows[Math.Min(y * rh / res, rh - 1)] as JArray;
+                    int rw = row.Count;
+                    for (int x = 0; x < res; x++)
+                        heights[y, x] = (float)row[Math.Min(x * rw / res, rw - 1)];
+                }
+            }
+            else throw new Exception("uniform (0-1) ya da heights (2B 0-1 dizisi) gerekli.");
+            data.SetHeights(0, 0, heights);
+            EditorUtility.SetDirty(data);
+            return new JObject { ["resolution"] = res };
+        }
+
+        static JToken AddTerrainLayer(JObject p)
+        {
+            var go = ResolveGameObject(p);
+            var terrain = go.GetComponent<Terrain>();
+            if (terrain == null || terrain.terrainData == null) throw new Exception("Nesnede Terrain (veya TerrainData) yok.");
+            var tex = LoadAssetSmart((string)p["texture"], "PPtr<$Texture2D>") as Texture2D;
+            if (tex == null) throw new Exception("Texture yuklenemedi: " + p["texture"]);
+            var layer = new TerrainLayer { diffuseTexture = tex };
+            if (Has(p, "tileSize")) { var t = p["tileSize"]; layer.tileSize = new Vector2((float)t[0], (float)t[1]); }
+            string layerPath = NormalizeAssetPath(Has(p, "assetPath") ? (string)p["assetPath"] : "Terrain/Layer", ".terrainlayer");
+            AssetDatabase.CreateAsset(layer, layerPath);
+            var layers = terrain.terrainData.terrainLayers.ToList();
+            layers.Add(layer);
+            terrain.terrainData.terrainLayers = layers.ToArray();
+            AssetDatabase.SaveAssets();
+            return new JObject { ["layerPath"] = layerPath, ["totalLayers"] = terrain.terrainData.terrainLayers.Length };
         }
     }
 }

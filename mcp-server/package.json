@@ -1,7 +1,7 @@
 {
   "name": "unity-mcp-bridge",
-  "version": "1.0.0",
-  "description": "Claude Code / Antigravity icin Unity Editor MCP koprusu",
+  "version": "4.0.0",
+  "description": "Claude Code / Antigravity icin Unity Editor MCP koprusu (52 arac: sahne, script, play mode, tilemap, animasyon, particle, terrain)",
   "type": "module",
   "bin": { "unity-mcp-bridge": "server.js" },
   "engines": { "node": ">=18" },

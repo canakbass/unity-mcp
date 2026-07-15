@@ -1,6 +1,6 @@
 # Unity MCP Bridge
 
-Let **Claude Code** and **Antigravity** drive the Unity Editor directly: see the scene, create/move/delete objects, edit components and their properties, place prefabs, write C# scripts and read/fix compile errors, control **Play mode**, and build **tilemaps**, **animations** and **animator controllers** — all from natural language. **No API key required** — it works with your existing subscription.
+Let **Claude Code** and **Antigravity** drive the Unity Editor directly: see the scene, create/move/delete objects, edit components and their properties, place prefabs, write C# scripts and read/fix compile errors, control **Play mode**, and build **tilemaps**, **animations**, **blend trees**, **particle systems** and **terrains** — all from natural language. **No API key required** — it works with your existing subscription.
 
 > Compatible with **Unity 6.2+ (EntityId API)** as well as older versions — see [Unity version compatibility](#unity-version-compatibility).
 
@@ -137,6 +137,7 @@ Add this to Antigravity's MCP config (via the Agent panel → MCP servers → *v
 | `unity_create_tilemap` | Create a Grid + Tilemap |
 | `unity_create_tile_asset` | Create a Tile asset from a sprite |
 | `unity_set_tiles` | Paint tiles onto a Tilemap at cell coordinates |
+| `unity_create_rule_tile` *(v4)* | Create an auto-tiling RuleTile (requires the *2D Tilemap Extras* package) |
 
 **2D: Sprite import** *(new in v3)*
 
@@ -144,7 +145,7 @@ Add this to Antigravity's MCP config (via the Agent panel → MCP servers → *v
 |---|---|
 | `unity_set_texture_import_settings` | Texture type, sprite mode, Pixels Per Unit, filter mode, … (+ reimport) |
 
-**Animation** *(new in v3)*
+**Animation** *(v3 / v4)*
 
 | Tool | Purpose |
 |---|---|
@@ -152,6 +153,22 @@ Add this to Antigravity's MCP config (via the Agent panel → MCP servers → *v
 | `unity_create_animation_clip` | Generic clip with float curves on any property |
 | `unity_create_animator_controller` | Controller with states (from clips), parameters and transitions |
 | `unity_assign_animator_controller` | Attach a controller to an object's Animator |
+| `unity_create_blend_tree` *(v4)* | Add a 1D/2D blend-tree state to a controller |
+| `unity_add_animator_sub_state_machine` *(v4)* | Add a sub-state machine with its own states & transitions |
+
+**Particle systems** *(new in v4)*
+
+| Tool | Purpose |
+|---|---|
+| `unity_create_particle_system` | Create/configure a particle system (lifetime, speed, color, emission rate, shape, material) |
+
+**Terrain** *(new in v4)*
+
+| Tool | Purpose |
+|---|---|
+| `unity_create_terrain` | Create a Terrain + TerrainData |
+| `unity_set_terrain_heights` | Set the heightmap (uniform, or resampled from a 2D array) |
+| `unity_add_terrain_layer` | Add a texture (TerrainLayer) |
 
 **Misc**
 
@@ -189,12 +206,11 @@ Unity **6.2** turned `Object.GetInstanceID()` / `EditorUtility.InstanceIDToObjec
 - **Port conflict** → Set the `Port` constant in `McpBridge.cs` and the `UNITY_MCP_PORT` env var on the server to the same value.
 - **set_property "property not found"** → Call `unity_get_object` first; Unity uses internal names (e.g. `m_Mass`, `m_Intensity`).
 
-### Roadmap (v4 ideas)
+### Roadmap
 
-- Animator sub-state machines & blend trees
-- Tile Palette / rule tiles
-- Particle system authoring
-- Terrain tools
+**Done in v4:** blend trees · animator sub-state machines · rule tiles (auto-tiling) · particle systems · terrain (create / heightmaps / layers).
+
+**v5 ideas:** Tile Palette assets · animation events · Timeline · lighting/bake control · NavMesh baking.
 
 ### License
 
@@ -204,7 +220,7 @@ MIT — see `LICENSE`.
 
 ## Türkçe
 
-**Claude Code** ve **Antigravity**'nin Unity Editor'ü doğrudan kontrol etmesini sağlar: sahneyi görür, nesne oluşturur/taşır/siler, component ve özelliklerini değiştirir, prefab yerleştirir, C# script yazıp derleme hatalarını okuyup düzeltir, **Play mode**'u kontrol eder ve **tilemap**, **animasyon**, **animator controller** kurar — hepsi doğal dille. **API anahtarı gerekmez** — mevcut aboneliğinle çalışır.
+**Claude Code** ve **Antigravity**'nin Unity Editor'ü doğrudan kontrol etmesini sağlar: sahneyi görür, nesne oluşturur/taşır/siler, component ve özelliklerini değiştirir, prefab yerleştirir, C# script yazıp derleme hatalarını okuyup düzeltir, **Play mode**'u kontrol eder ve **tilemap**, **animasyon**, **blend tree**, **particle system**, **terrain** kurar — hepsi doğal dille. **API anahtarı gerekmez** — mevcut aboneliğinle çalışır.
 
 > **Unity 6.2+ (EntityId API)** ve eski sürümlerle uyumlu — bkz. [Unity sürüm uyumu](#unity-sürüm-uyumu).
 
@@ -279,11 +295,15 @@ Antigravity'nin MCP config'ine ekle (Agent paneli → MCP servers → *view raw 
 
 **Play mode (v3):** `unity_play`, `unity_stop`, `unity_pause`, `unity_step`, `unity_get_play_state`.
 
-**2D — Tilemap (v3):** `unity_create_tilemap`, `unity_create_tile_asset`, `unity_set_tiles`.
+**2D — Tilemap (v3/v4):** `unity_create_tilemap`, `unity_create_tile_asset`, `unity_set_tiles`, `unity_create_rule_tile` *(v4 — 2D Tilemap Extras paketi gerekir)*.
 
 **2D — Sprite import (v3):** `unity_set_texture_import_settings` (Pixels Per Unit, sprite mode, filter mode…).
 
-**Animasyon (v3):** `unity_create_sprite_animation`, `unity_create_animation_clip`, `unity_create_animator_controller`, `unity_assign_animator_controller`.
+**Animasyon (v3/v4):** `unity_create_sprite_animation`, `unity_create_animation_clip`, `unity_create_animator_controller`, `unity_assign_animator_controller`, `unity_create_blend_tree` *(v4)*, `unity_add_animator_sub_state_machine` *(v4)*.
+
+**Particle system (v4):** `unity_create_particle_system` (ömür, hız, renk, emisyon, şekil, material).
+
+**Terrain (v4):** `unity_create_terrain`, `unity_set_terrain_heights`, `unity_add_terrain_layer`.
 
 **Joker:** `unity_execute_menu` (herhangi bir Unity menü komutu).
 
@@ -317,12 +337,11 @@ Unity **6.2**, `Object.GetInstanceID()` / `EditorUtility.InstanceIDToObject()`'i
 - **Port çakışması** → `McpBridge.cs` içindeki `Port` sabitini ve sunucudaki `UNITY_MCP_PORT` ortam değişkenini aynı değere ayarla.
 - **set_property "property bulunamadı"** → Önce `unity_get_object` çağır; Unity içsel adları kullanır (ör. `m_Mass`, `m_Intensity`).
 
-### Yol haritası (v4 fikirleri)
+### Yol haritası
 
-- Animator alt-state machine'leri & blend tree'ler
-- Tile Palette / rule tile'lar
-- Particle system düzenleme
-- Terrain araçları
+**v4'te tamamlandı:** blend tree'ler · animator alt-state machine'leri · rule tile'lar (auto-tiling) · particle system'ler · terrain (oluşturma / yükseklik haritası / katmanlar).
+
+**v5 fikirleri:** Tile Palette asset'leri · animation event'ler · Timeline · aydınlatma/bake kontrolü · NavMesh bake.
 
 ### Lisans
 
