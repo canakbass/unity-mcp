@@ -1,0 +1,11 @@
+# Node
+node_modules/
+npm-debug.log*
+*.log
+
+# Machine-specific example config (path differs per user; see README)
+mcp-server/antigravity-mcp-config.json
+
+# OS
+.DS_Store
+Thumbs.db
