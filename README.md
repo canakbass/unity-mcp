@@ -327,3 +327,7 @@ Unity **6.2**, `Object.GetInstanceID()` / `EditorUtility.InstanceIDToObject()`'i
 ### Lisans
 
 MIT — bkz. `LICENSE`.
+
+---
+
+Made by **Can Akbas** — [github.com/canakbass](https://github.com/canakbass) · [@canakbass](https://github.com/canakbass)
