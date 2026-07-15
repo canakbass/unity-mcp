@@ -148,7 +148,12 @@ namespace McpUnity
                 JToken result = null;
                 string error = null;
                 try { result = Handle((string)p.Request["method"], p.Request["params"] as JObject ?? new JObject()); }
-                catch (Exception e) { error = e.Message; }
+                catch (Exception e)
+                {
+                    // Reflection cagrilari gercek hatayi TargetInvocationException icine sarar; ac.
+                    error = (e is System.Reflection.TargetInvocationException tie && tie.InnerException != null)
+                        ? tie.InnerException.Message : e.Message;
+                }
 
                 var resp = new JObject { ["id"] = p.Request["id"] };
                 if (error != null) resp["error"] = error; else resp["result"] = result ?? JValue.CreateNull();
@@ -179,7 +184,7 @@ namespace McpUnity
                 case "create_script": return CreateScript(p);
                 case "read_file": return ReadFile(p);
                 case "read_console": return ReadConsole(p);
-                case "save_scene": EditorSceneManager.SaveOpenScenes(); return "kaydedildi";
+                case "save_scene": return SaveScenes();
                 // ---- v2: Material ----
                 case "create_material": return CreateMaterial(p);
                 case "set_material": return SetMaterial(p);
@@ -238,18 +243,46 @@ namespace McpUnity
         // ---- Yardimcilar ----
         static bool Has(JObject p, string key) => p[key] != null && p[key].Type != JTokenType.Null;
 
-        // Unity 6.2+ InstanceID API'lerini "hata" seviyesinde kullanimdan kaldirdi; EntityId<->int
-        // donusumleri de obsolete-error oldu. Klasik int instanceId semantigini (MCP protokolu ve
-        // server.js ile birebir uyumlu, negatif sahne ID'leri dahil) korumak icin eski metotlara
-        // reflection ile eristik: reflection derleme-zamani obsolete kontrolunu atlar, metotlar her
-        // surumde calisma-zamaninda hala mevcut.
-        static readonly System.Reflection.MethodInfo _miGetInstanceID =
-            typeof(UnityEngine.Object).GetMethod("GetInstanceID", Type.EmptyTypes);
-        static readonly System.Reflection.MethodInfo _miInstanceIDToObject =
-            typeof(EditorUtility).GetMethod("InstanceIDToObject", new[] { typeof(int) });
+        // Unity 6.2+ instance ID API'lerini degistirdi: GetInstanceID/InstanceIDToObject(int) obsolete
+        // oldu VE InstanceIDToObject(int) CALISMA-ZAMANINDA exception firlatiyor. Sanctioned yol
+        // EntityIdToObject(EntityId). EntityId<->int donusumleri de obsolete-error oldugundan bu
+        // API'lere reflection ile eristik (reflection hem derleme hem calisma-zamani obsolete
+        // kontrolunu atlar). Boylece protokolun kullandigi tamsayi instanceId korunur. Eski Unity'de
+        // (EntityId yok) klasik GetInstanceID/InstanceIDToObject'e geri duseriz.
+        // EntityId<->int donusumleri ve InstanceIDToObject(int) Unity 6.2+'da runtime'da throw ediyor.
+        // Bu yuzden id'yi EntityId'nin obsolete-OLMAYAN ham erisimcileriyle tasiyoruz:
+        // GetEntityId -> EntityId.ToULong -> (sayi) ; (sayi) -> EntityId.FromULong -> EntityIdToObject.
+        // Boylece protokolde sayisal instanceId korunur, hicbir yasak operatore dokunmadan.
+        static readonly Type _entityIdType = typeof(UnityEngine.Object).Assembly.GetType("UnityEngine.EntityId");
+        static readonly System.Reflection.MethodInfo _miGetEntityId = typeof(UnityEngine.Object).GetMethod("GetEntityId", Type.EmptyTypes);
+        static readonly System.Reflection.MethodInfo _miToULong = _entityIdType?.GetMethod("ToULong", new[] { _entityIdType });     // static EntityId -> ulong
+        static readonly System.Reflection.MethodInfo _miFromULong = _entityIdType?.GetMethod("FromULong", new[] { typeof(ulong) }); // static ulong -> EntityId
+        static readonly System.Reflection.MethodInfo _miEntityIdToObject = _entityIdType != null ? typeof(EditorUtility).GetMethod("EntityIdToObject", new[] { _entityIdType }) : null;
+        // Eski Unity fallback:
+        static readonly System.Reflection.MethodInfo _miGetInstanceID = typeof(UnityEngine.Object).GetMethod("GetInstanceID", Type.EmptyTypes);
+        static readonly System.Reflection.MethodInfo _miInstanceIDToObject = typeof(EditorUtility).GetMethod("InstanceIDToObject", new[] { typeof(int) });
 
-        static int GetIID(UnityEngine.Object o) => (int)_miGetInstanceID.Invoke(o, null);
-        static UnityEngine.Object IIDToObject(int id) => (UnityEngine.Object)_miInstanceIDToObject.Invoke(null, new object[] { id });
+        static bool UseEntityId => _miGetEntityId != null && _miToULong != null && _miFromULong != null && _miEntityIdToObject != null;
+
+        static long GetIID(UnityEngine.Object o)
+        {
+            if (UseEntityId)
+            {
+                var eid = _miGetEntityId.Invoke(o, null);
+                return (long)(ulong)_miToULong.Invoke(null, new[] { eid });
+            }
+            return (int)_miGetInstanceID.Invoke(o, null);
+        }
+
+        static UnityEngine.Object IIDToObject(long id)
+        {
+            if (UseEntityId)
+            {
+                var eid = _miFromULong.Invoke(null, new object[] { (ulong)id });
+                return (UnityEngine.Object)_miEntityIdToObject.Invoke(null, new[] { eid });
+            }
+            return (UnityEngine.Object)_miInstanceIDToObject.Invoke(null, new object[] { (int)id });
+        }
 
         // FindObjectsOfType da kullanimdan kalkti; Unity 6'da parametresiz (deprecated olmayan)
         // surumu, eski surumlerde klasik FindObjectsOfType.
@@ -266,9 +299,9 @@ namespace McpUnity
         {
             if (Has(p, "instanceId"))
             {
-                var obj = IIDToObject((int)p["instanceId"]) as GameObject;
+                var obj = IIDToObject((long)p["instanceId"]) as GameObject;
                 if (obj != null) return obj;
-                var comp = IIDToObject((int)p["instanceId"]) as Component;
+                var comp = IIDToObject((long)p["instanceId"]) as Component;
                 if (comp != null) return comp.gameObject;
                 throw new Exception("instanceId ile GameObject bulunamadi: " + p["instanceId"]);
             }
@@ -512,7 +545,7 @@ namespace McpUnity
         {
             UnityEngine.Object target;
             if (Has(p, "componentInstanceId"))
-                target = IIDToObject((int)p["componentInstanceId"]);
+                target = IIDToObject((long)p["componentInstanceId"]);
             else if (Has(p, "assetPath"))
                 target = AssetDatabase.LoadMainAssetAtPath((string)p["assetPath"]);
             else
@@ -549,7 +582,7 @@ namespace McpUnity
                     break;
                 case SerializedPropertyType.ObjectReference:
                     if (val == null || val.Type == JTokenType.Null) sp.objectReferenceValue = null;
-                    else if (val.Type == JTokenType.Integer) sp.objectReferenceValue = IIDToObject((int)val);
+                    else if (val.Type == JTokenType.Integer) sp.objectReferenceValue = IIDToObject((long)val);
                     else
                     {
                         sp.objectReferenceValue = LoadAssetSmart((string)val, sp.type);
@@ -864,7 +897,7 @@ namespace McpUnity
         {
             bool additive = Has(p, "additive") && (bool)p["additive"];
             bool saveCurrent = !Has(p, "saveCurrent") || (bool)p["saveCurrent"];
-            if (saveCurrent) EditorSceneManager.SaveOpenScenes();
+            if (saveCurrent) SaveScenes();
             var scene = EditorSceneManager.OpenScene((string)p["path"], additive ? OpenSceneMode.Additive : OpenSceneMode.Single);
             return new JObject { ["name"] = scene.name, ["path"] = scene.path, ["mode"] = additive ? "additive" : "single" };
         }
@@ -873,7 +906,7 @@ namespace McpUnity
         {
             bool additive = Has(p, "additive") && (bool)p["additive"];
             bool empty = Has(p, "empty") && (bool)p["empty"];
-            if (!additive) EditorSceneManager.SaveOpenScenes();
+            if (!additive) SaveScenes();
             var scene = EditorSceneManager.NewScene(
                 empty ? NewSceneSetup.EmptyScene : NewSceneSetup.DefaultGameObjects,
                 additive ? NewSceneMode.Additive : NewSceneMode.Single);
@@ -1047,6 +1080,34 @@ namespace McpUnity
             foreach (var token in arr) scenes.Add(new EditorBuildSettingsScene((string)token, true));
             EditorBuildSettings.scenes = scenes.ToArray();
             return "Build settings guncellendi (" + scenes.Count + " sahne)";
+        }
+
+        // Acik sahneleri kaydeder. Isimsiz (hic kaydedilmemis) sahne icin modal "Save As" dialog
+        // ACMADAN varsayilan bir yola (Assets/Scenes/<ad>.unity) otomatik kaydeder.
+        static JToken SaveScenes()
+        {
+            int saved = 0;
+            var paths = new JArray();
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                var s = SceneManager.GetSceneAt(i);
+                if (!s.isLoaded) continue;
+                if (string.IsNullOrEmpty(s.path))
+                {
+                    string name = string.IsNullOrEmpty(s.name) ? "Untitled" : s.name;
+                    Directory.CreateDirectory(Path.Combine(Directory.GetCurrentDirectory(), "Assets/Scenes"));
+                    string path = AssetDatabase.GenerateUniqueAssetPath("Assets/Scenes/" + name + ".unity");
+                    EditorSceneManager.SaveScene(s, path);
+                    paths.Add(path);
+                }
+                else
+                {
+                    EditorSceneManager.SaveScene(s);
+                    paths.Add(s.path);
+                }
+                saved++;
+            }
+            return new JObject { ["saved"] = saved, ["paths"] = paths };
         }
 
         // =====================================================================
