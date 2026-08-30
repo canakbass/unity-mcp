@@ -1,0 +1,16 @@
+{
+  "name": "com.canakbass.unity-mcp",
+  "version": "5.0.0",
+  "displayName": "Unity MCP Bridge",
+  "description": "Drives the Unity Editor from any MCP client (Claude Code, Cursor, Windsurf, Antigravity). Listens on 127.0.0.1:6400 and executes commands on the main thread. Built for low token cost: selectable tool groups, incremental console reads, isolated object screenshots.",
+  "unity": "2021.2",
+  "license": "MIT",
+  "keywords": ["mcp", "ai", "claude", "cursor", "editor", "automation", "agent"],
+  "author": {
+    "name": "Can Akbas",
+    "url": "https://github.com/canakbass"
+  },
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
+}

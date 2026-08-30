@@ -1,12 +1,33 @@
 {
   "name": "unity-mcp-bridge",
-  "version": "4.0.0",
-  "description": "Claude Code / Antigravity icin Unity Editor MCP koprusu (52 arac: sahne, script, play mode, tilemap, animasyon, particle, terrain)",
+  "version": "5.0.0",
+  "description": "Unity Editor MCP bridge for Claude Code, Cursor, Windsurf and any MCP client. 52 tools (scene, scripts, play mode, tilemap, animation, particles, terrain), built for low token cost: selectable tool groups, incremental console reads, isolated screenshots.",
   "type": "module",
-  "bin": { "unity-mcp-bridge": "server.js" },
-  "engines": { "node": ">=18" },
+  "bin": {
+    "unity-mcp-bridge": "server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.24.0"
+  },
+  "keywords": [
+    "mcp",
+    "unity",
+    "unity3d",
+    "claude",
+    "cursor",
+    "ai",
+    "llm",
+    "gamedev",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "author": "Can Akbas",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/canakbass/unity-mcp.git"
   }
 }

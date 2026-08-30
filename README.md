@@ -6,7 +6,23 @@
 ![License](https://img.shields.io/badge/license-MIT-3DA639)
 ![No API key](https://img.shields.io/badge/API%20key-not%20required-orange)
 
-Let **Claude Code** and **Antigravity** drive the Unity Editor directly: see the scene, create/move/delete objects, edit components and their properties, place prefabs, write C# scripts and read/fix compile errors, control **Play mode**, and build **tilemaps**, **animations**, **blend trees**, **particle systems** and **terrains** — all from natural language. **No API key required** — it works with your existing subscription.
+![NEON SURVIVORS, built through this bridge](docs/demo.gif)
+
+> *NEON SURVIVORS — sprites, audio, ~7,400 lines of C# and every scene, built end-to-end by an agent through this bridge.*
+
+Drive the Unity Editor from **Claude Code**, **Cursor**, **Windsurf**, **Antigravity** or any MCP client: see the scene, create/move/delete objects, edit components and their properties, place prefabs, write C# scripts and fix their compile errors, control **Play mode**, and build **tilemaps**, **animations**, **blend trees**, **particle systems** and **terrains** — all from natural language. **No API key, no account, no Python** — one C# file plus Node, working with your existing subscription.
+
+### Built for low token cost
+
+An agent pays for every token it reads, and a careless Unity bridge burns them fast — 50 tool schemas at startup, a full scene dump to find one object, the same exception repeated 200 times in a console read. This one is built the other way round:
+
+| | |
+|---|---|
+| **Load only the tools you need** | `UNITY_MCP_TOOLS=core` exposes 19 tools instead of 52 — **~3.1k tokens instead of ~8.8k**, every session |
+| **Read the console incrementally** | Pass the previous `cursor` back as `since` and get only what is new; identical repeats collapse into one entry with a `count` |
+| **Build scenes in one call** | `unity_create_objects` creates many objects per round trip, with shared defaults and per-item overrides |
+| **Screenshot only what you need** | `isolate:"Enemy/Sprite"` renders one object alone instead of a full frame you have to squint at |
+| **Guidance every client receives** | Usage rules ship in the MCP `instructions` field, so no per-editor rules file is needed |
 
 > Compatible with **Unity 6.2+ (EntityId API)** as well as older versions — see [Unity version compatibility](#unity-version-compatibility).
 
@@ -67,41 +83,61 @@ Claude Code / Antigravity  ─MCP(stdio)→  server.js  ─TCP:6400→  Unity Ed
 
 - **Unity 2021.2+** (tested up to **Unity 6.x**). Prefab-mode APIs need 2021.2+.
 - **Node.js 18+**
-- The **Newtonsoft JSON** package (`com.unity.nuget.newtonsoft-json`) — already present in most projects.
+- The **Newtonsoft JSON** package (`com.unity.nuget.newtonsoft-json`) — pulled in automatically when you install via UPM.
 
 ### Installation
 
-#### 1) Unity side
-1. Copy `UnityPackage/Editor/McpBridge.cs` into your project at `Assets/Editor/McpBridge.cs`.
-2. Make sure Newtonsoft JSON is installed. If not: **Window > Package Manager > + > Add package by name** → `com.unity.nuget.newtonsoft-json`.
-3. After it compiles, the Console should show: `[MCP Bridge] Listening on 127.0.0.1:6400`. If not: **Tools > MCP Bridge > Restart Server**.
+#### 1) Unity side — one line
 
-#### 2) MCP server
-```bash
-git clone https://github.com/canakbass/unity-mcp.git
-cd unity-mcp/mcp-server
-npm install
+**Window > Package Manager > + > Add package from git URL:**
+
+```
+https://github.com/canakbass/unity-mcp.git?path=/UnityPackage
 ```
 
-#### 3) Connect to Claude Code
+Newtonsoft JSON is pulled in automatically as a dependency. When it compiles the
+Console shows `[MCP Bridge] Listening on 127.0.0.1:6400`.
+
+*(Pin a version with `#v5.0.0`. Prefer not to use UPM? Copy `UnityPackage/Editor/McpBridge.cs` to `Assets/Editor/` and install `com.unity.nuget.newtonsoft-json` yourself.)*
+
+#### 2) Server and client config — one window
+
 ```bash
-# run from the mcp-server directory:
+git clone https://github.com/canakbass/unity-mcp.git
+```
+
+Then in Unity open **Tools > MCP Bridge > Setup...** and use the three buttons:
+
+1. **server.js** — usually found automatically; otherwise browse to `mcp-server/server.js`
+2. **Run npm install** — installs the two dependencies
+3. **Write .mcp.json for this project** (or *.cursor/mcp.json*, or *copy the `claude mcp add` command*)
+
+Restart your client and you are done. The window merges into an existing config
+rather than replacing it, and backs the old file up as `.bak`, so other MCP
+servers you already configured are left alone.
+
+<details>
+<summary>Prefer the command line?</summary>
+
+```bash
+cd unity-mcp/mcp-server && npm install
 claude mcp add unity -s user -- node "$(pwd)/server.js"
 ```
 Verify with `claude mcp list` → `unity` should show **✔ Connected**.
 
-#### 4) Connect to Antigravity
-Add this to Antigravity's MCP config (via the Agent panel → MCP servers → *view raw config*):
+Any other client takes the same shape:
 ```json
 {
   "mcpServers": {
     "unity": {
       "command": "node",
-      "args": ["/path/to/unity-mcp/mcp-server/server.js"]
+      "args": ["/path/to/unity-mcp/mcp-server/server.js"],
+      "env": { "UNITY_MCP_TOOLS": "core,assets" }
     }
   }
 }
 ```
+</details>
 
 ### Trimming the tool list (token cost)
 
@@ -275,6 +311,7 @@ Unity **6.2** turned `Object.GetInstanceID()` / `EditorUtility.InstanceIDToObjec
 
 ### Troubleshooting
 
+- **Start here:** **Tools > MCP Bridge > Setup...** shows whether the bridge is listening, whether `server.js` was found and whether its dependencies are installed.
 - **"Couldn't connect to Unity Editor"** → Is Unity open? Is the bridge message in the Console? **Tools > MCP Bridge > Restart Server**.
 - **Timeout during compilation** → Unity can't answer while compiling scripts; wait a few seconds and retry (60s timeout).
 - **Port conflict** → Set the `Port` constant in `McpBridge.cs` and the `UNITY_MCP_PORT` env var on the server to the same value.
@@ -282,7 +319,7 @@ Unity **6.2** turned `Object.GetInstanceID()` / `EditorUtility.InstanceIDToObjec
 
 ### Roadmap
 
-**Done in v5:** incremental console reads (`since`/`cursor`) · repeated logs collapsed into a `count` · batch object creation · Game View backbuffer capture (`source:"screen"`) · isolated object rendering (`isolate`) · tool groups (`UNITY_MCP_TOOLS`) · English tool descriptions and runtime messages throughout.
+**Done in v5:** UPM package (one-line git URL install, Newtonsoft resolved automatically) · **Tools > MCP Bridge > Setup...** window that finds `server.js`, runs `npm install` and writes the client config without clobbering other servers · incremental console reads (`since`/`cursor`) · repeated logs collapsed into a `count` · batch object creation · Game View backbuffer capture (`source:"screen"`) · isolated object rendering (`isolate`) · tool groups (`UNITY_MCP_TOOLS`) · English tool descriptions and runtime messages throughout.
 
 **Done in v4:** blend trees · animator sub-state machines · rule tiles (auto-tiling) · particle systems · terrain (create / heightmaps / layers).
 
@@ -296,7 +333,19 @@ MIT — see `LICENSE`.
 
 ## Türkçe
 
-**Claude Code** ve **Antigravity**'nin Unity Editor'ü doğrudan kontrol etmesini sağlar: sahneyi görür, nesne oluşturur/taşır/siler, component ve özelliklerini değiştirir, prefab yerleştirir, C# script yazıp derleme hatalarını okuyup düzeltir, **Play mode**'u kontrol eder ve **tilemap**, **animasyon**, **blend tree**, **particle system**, **terrain** kurar — hepsi doğal dille. **API anahtarı gerekmez** — mevcut aboneliğinle çalışır.
+**Claude Code**, **Cursor**, **Windsurf**, **Antigravity** ya da herhangi bir MCP istemcisinin Unity Editor'ü doğrudan kontrol etmesini sağlar: sahneyi görür, nesne oluşturur/taşır/siler, component ve özelliklerini değiştirir, prefab yerleştirir, C# script yazıp derleme hatalarını düzeltir, **Play mode**'u kontrol eder ve **tilemap**, **animasyon**, **blend tree**, **particle system**, **terrain** kurar — hepsi doğal dille. **API anahtarı, hesap ve Python gerekmez** — tek bir C# dosyası ve Node, mevcut aboneliğinle çalışır.
+
+### Düşük token maliyeti için tasarlandı
+
+Ajan okuduğu her token için ödeme yapar ve dikkatsiz bir Unity köprüsü bunu hızla yakar — açılışta 50 araç şeması, tek nesne bulmak için tüm sahne dökümü, konsol okumasında 200 kez tekrar eden aynı exception. Bu köprü tersine kurgulandı:
+
+| | |
+|---|---|
+| **Sadece gereken araçlar** | `UNITY_MCP_TOOLS=core` 52 yerine 19 araç açar — her oturumda **~8.8k yerine ~3.1k token** |
+| **Artımlı konsol okuma** | Önceki `cursor`'ı `since` olarak geri ver, sadece yeni olanı al; birebir tekrarlar `count` ile tek satıra iner |
+| **Tek çağrıda sahne kurma** | `unity_create_objects` bir gidiş-dönüşte çok nesne yaratır, ortak varsayılanlar + nesne başına override |
+| **Sadece gerekeni görüntüle** | `isolate:"Enemy/Sprite"` gözünü kısarak bakacağın tam kare yerine tek nesneyi render eder |
+| **Her istemciye ulaşan rehber** | Kullanım kuralları MCP `instructions` alanında gelir, editöre özel kural dosyası gerekmez |
 
 > **Unity 6.2+ (EntityId API)** ve eski sürümlerle uyumlu — bkz. [Unity sürüm uyumu](#unity-sürüm-uyumu).
 
@@ -317,41 +366,61 @@ Claude Code / Antigravity  ─MCP(stdio)→  server.js  ─TCP:6400→  Unity Ed
 
 - **Unity 2021.2+** (**Unity 6.x**'e kadar test edildi). Prefab modu API'leri için 2021.2+ gerekir.
 - **Node.js 18+**
-- **Newtonsoft JSON** paketi (`com.unity.nuget.newtonsoft-json`) — çoğu projede zaten vardır.
+- **Newtonsoft JSON** paketi (`com.unity.nuget.newtonsoft-json`) — UPM ile kurunca otomatik gelir.
 
 ### Kurulum
 
-#### 1) Unity tarafı
-1. `UnityPackage/Editor/McpBridge.cs` dosyasını projene kopyala: `Assets/Editor/McpBridge.cs`.
-2. Newtonsoft JSON paketinin kurulu olduğundan emin ol. Yoksa: **Window > Package Manager > + > Add package by name** → `com.unity.nuget.newtonsoft-json`.
-3. Derleme bitince Console'da şunu görmelisin: `[MCP Bridge] Listening on 127.0.0.1:6400`. Görünmüyorsa: **Tools > MCP Bridge > Restart Server**.
+#### 1) Unity tarafı — tek satır
 
-#### 2) MCP sunucusu
-```bash
-git clone https://github.com/canakbass/unity-mcp.git
-cd unity-mcp/mcp-server
-npm install
+**Window > Package Manager > + > Add package from git URL:**
+
+```
+https://github.com/canakbass/unity-mcp.git?path=/UnityPackage
 ```
 
-#### 3) Claude Code'a bağlama
+Newtonsoft JSON bağımlılık olarak otomatik gelir. Derleme bitince Console'da
+`[MCP Bridge] Listening on 127.0.0.1:6400` görünür.
+
+*(Sürüm sabitlemek için `#v5.0.0` ekle. UPM istemiyorsan `UnityPackage/Editor/McpBridge.cs`'i `Assets/Editor/` altına kopyala ve `com.unity.nuget.newtonsoft-json` paketini kendin kur.)*
+
+#### 2) Sunucu ve istemci ayarı — tek pencere
+
 ```bash
-# mcp-server dizininden çalıştır:
+git clone https://github.com/canakbass/unity-mcp.git
+```
+
+Sonra Unity'de **Tools > MCP Bridge > Setup...** aç ve üç butonu kullan:
+
+1. **server.js** — genelde otomatik bulunur; bulunmazsa `mcp-server/server.js`'i seç
+2. **Run npm install** — iki bağımlılığı kurar
+3. **Write .mcp.json for this project** (ya da *.cursor/mcp.json*, ya da *`claude mcp add` komutunu kopyala*)
+
+İstemciyi yeniden başlat, bitti. Pencere mevcut config'i silmez, içine ekler ve
+eski dosyayı `.bak` olarak yedekler — daha önce kurduğun MCP sunucularına
+dokunmaz.
+
+<details>
+<summary>Komut satırını mı tercih edersin?</summary>
+
+```bash
+cd unity-mcp/mcp-server && npm install
 claude mcp add unity -s user -- node "$(pwd)/server.js"
 ```
 Kontrol: `claude mcp list` → `unity` **✔ Connected** görünmeli.
 
-#### 4) Antigravity'e bağlama
-Antigravity'nin MCP config'ine ekle (Agent paneli → MCP servers → *view raw config*):
+Diğer istemciler aynı biçimi kullanır:
 ```json
 {
   "mcpServers": {
     "unity": {
       "command": "node",
-      "args": ["/tam/yol/unity-mcp/mcp-server/server.js"]
+      "args": ["/tam/yol/unity-mcp/mcp-server/server.js"],
+      "env": { "UNITY_MCP_TOOLS": "core,assets" }
     }
   }
 }
 ```
+</details>
 
 ### Araç listesini kısaltma (token maliyeti)
 
@@ -441,6 +510,7 @@ Unity **6.2**, `Object.GetInstanceID()` / `EditorUtility.InstanceIDToObject()`'i
 
 ### Sorun giderme
 
+- **Buradan başla:** **Tools > MCP Bridge > Setup...** köprünün dinleyip dinlemediğini, `server.js`'in bulunup bulunmadığını ve bağımlılıkların kurulu olup olmadığını gösterir.
 - **"Unity Editor'e bağlanılamadı"** → Unity açık mı? Console'da köprü mesajı var mı? **Tools > MCP Bridge > Restart Server**.
 - **Derleme sırasında zaman aşımı** → Unity script derlerken istekleri yanıtlayamaz; birkaç saniye bekleyip tekrar dene (60 sn timeout).
 - **Port çakışması** → `McpBridge.cs` içindeki `Port` sabitini ve sunucudaki `UNITY_MCP_PORT` ortam değişkenini aynı değere ayarla.
@@ -448,7 +518,7 @@ Unity **6.2**, `Object.GetInstanceID()` / `EditorUtility.InstanceIDToObject()`'i
 
 ### Yol haritası
 
-**v5'te tamamlandı:** artımlı konsol okuma (`since`/`cursor`) · tekrar eden logların `count` ile toplanması · toplu nesne oluşturma · Game View backbuffer yakalama (`source:"screen"`) · yalıtılmış nesne render'ı (`isolate`) · araç grupları (`UNITY_MCP_TOOLS`) · tüm araç açıklamaları ve çalışma zamanı mesajları İngilizce.
+**v5'te tamamlandı:** UPM paketi (tek satır git URL kurulumu, Newtonsoft otomatik) · `server.js`'i bulan, `npm install` çalıştıran ve istemci config'ini diğer sunucuları bozmadan yazan **Tools > MCP Bridge > Setup...** penceresi · artımlı konsol okuma (`since`/`cursor`) · tekrar eden logların `count` ile toplanması · toplu nesne oluşturma · Game View backbuffer yakalama (`source:"screen"`) · yalıtılmış nesne render'ı (`isolate`) · araç grupları (`UNITY_MCP_TOOLS`) · tüm araç açıklamaları ve çalışma zamanı mesajları İngilizce.
 
 **v4'te tamamlandı:** blend tree'ler · animator alt-state machine'leri · rule tile'lar (auto-tiling) · particle system'ler · terrain (oluşturma / yükseklik haritası / katmanlar).
 

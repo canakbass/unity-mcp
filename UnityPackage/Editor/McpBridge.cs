@@ -33,6 +33,9 @@ namespace McpUnity
         static Thread _listenThread;
         static volatile bool _running;
 
+        /// <summary>True while the TCP listener is accepting connections.</summary>
+        public static bool IsRunning => _running;
+
         class Pending
         {
             public JObject Request;
