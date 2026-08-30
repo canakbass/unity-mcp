@@ -1,5 +1,11 @@
 # Unity MCP Bridge
 
+![Unity](https://img.shields.io/badge/Unity-2021.2%20→%206.x-000000?logo=unity&logoColor=white)
+![Node](https://img.shields.io/badge/Node-18%2B-5FA04E?logo=node.js&logoColor=white)
+![Tools](https://img.shields.io/badge/tools-52-2088FF)
+![License](https://img.shields.io/badge/license-MIT-3DA639)
+![No API key](https://img.shields.io/badge/API%20key-not%20required-orange)
+
 Let **Claude Code** and **Antigravity** drive the Unity Editor directly: see the scene, create/move/delete objects, edit components and their properties, place prefabs, write C# scripts and read/fix compile errors, control **Play mode**, and build **tilemaps**, **animations**, **blend trees**, **particle systems** and **terrains** — all from natural language. **No API key required** — it works with your existing subscription.
 
 > Compatible with **Unity 6.2+ (EntityId API)** as well as older versions — see [Unity version compatibility](#unity-version-compatibility).
@@ -26,6 +32,11 @@ field. The short version:
 - **Screenshots are for visual checks only** (~2k tokens each). To verify logic
   or numbers, have an editor script write `Logs/report.txt` and read the file —
   cheaper and exact.
+- **Pick the right screenshot source.** While playing, `source:"screen"` reads
+  the Game View image as-is — post-processing and overlay UI exactly as the
+  player sees them, and nothing in the scene is touched. Checking a single
+  sprite or prefab? `isolate:"Hierarchy/Path"` renders that object alone, which
+  is far cheaper and clearer than a full frame.
 - **Read the console incrementally:** pass the `cursor` from the previous
   `unity_read_console` call back as `since` to get only new entries. Repeated
   identical messages are collapsed into one entry with a `count`, so a
@@ -63,7 +74,7 @@ Claude Code / Antigravity  ─MCP(stdio)→  server.js  ─TCP:6400→  Unity Ed
 #### 1) Unity side
 1. Copy `UnityPackage/Editor/McpBridge.cs` into your project at `Assets/Editor/McpBridge.cs`.
 2. Make sure Newtonsoft JSON is installed. If not: **Window > Package Manager > + > Add package by name** → `com.unity.nuget.newtonsoft-json`.
-3. After it compiles, the Console should show: `[MCP Bridge] Dinleniyor: 127.0.0.1:6400`. If not: **Tools > MCP Bridge > Restart Server**.
+3. After it compiles, the Console should show: `[MCP Bridge] Listening on 127.0.0.1:6400`. If not: **Tools > MCP Bridge > Restart Server**.
 
 #### 2) MCP server
 ```bash
@@ -92,6 +103,38 @@ Add this to Antigravity's MCP config (via the Agent panel → MCP servers → *v
 }
 ```
 
+### Trimming the tool list (token cost)
+
+All 52 schemas cost the agent roughly **8.8k tokens** at the start of every
+session, and most projects never touch terrain or blend trees. Set
+`UNITY_MCP_TOOLS` to expose only the groups you need — `core` is always
+included, so a subset can never strand the agent:
+
+| Setting | Tools | Schema cost |
+|---|---|---|
+| *(unset)* or `all` | 52 | ~8.8k tokens |
+| `core` | 19 | ~3.1k tokens |
+| `core,tilemap` | 23 | ~3.9k tokens |
+| `assets,anim` | 33 | ~6.2k tokens |
+
+**Groups:** `core` (scene/objects/components, console, scripts, play mode,
+screenshots) · `scenes` · `assets` · `prefabs` · `anim` · `tilemap` · `terrain`.
+You can also name individual tools: `UNITY_MCP_TOOLS=core,unity_create_terrain`.
+
+```jsonc
+{
+  "mcpServers": {
+    "unity": {
+      "command": "node",
+      "args": ["/path/to/unity-mcp/mcp-server/server.js"],
+      "env": { "UNITY_MCP_TOOLS": "core,assets,ui" }
+    }
+  }
+}
+```
+
+The startup line reports what is live: `[unity-mcp] ready — Unity 127.0.0.1:6400 — 19 tools (UNITY_MCP_TOOLS=core)`.
+
 ### Tool list
 
 **Perception & reading**
@@ -99,18 +142,19 @@ Add this to Antigravity's MCP config (via the Agent panel → MCP servers → *v
 | Tool | Purpose |
 |---|---|
 | `unity_get_scene` | Scene hierarchy + instanceIds |
-| `unity_get_object` | Full component/property dump of an object (incl. propertyPaths) |
+| `unity_get_object` | Full component/property dump of an object (incl. propertyPaths, tag, layer) |
 | `unity_get_material` / `unity_get_asset` | Read a material's / any asset's fields (sub-assets included) |
 | `unity_find_assets` | Search project assets (`t:Prefab tree`, `t:Material`, …) |
 | `unity_read_file` | Read a C# / text file under `Assets` |
-| `unity_read_console` | Read console logs / compile errors |
-| `unity_capture_screenshot` | Capture the scene/game as PNG; the model **sees** the image (Screen Space Overlay UI included) |
+| `unity_read_console` | Console logs / compile errors — **incremental** (`since` + `cursor`), repeats collapsed into a `count` |
+| `unity_capture_screenshot` | PNG the model **sees**. `source:"screen"` grabs the live Game View untouched; `source:"camera"` re-renders (overlay UI included); `isolate:"Path"` renders one object alone |
 
 **Scene & object editing**
 
 | Tool | Purpose |
 |---|---|
 | `unity_create_object` | Create empty or primitive GameObject |
+| `unity_create_objects` | Create **many** objects in one round trip (shared defaults + per-item overrides; one bad item does not abort the batch) |
 | `unity_delete_object` | Delete an object (Undo-aware) |
 | `unity_set_transform` | Position / rotation / scale (world or local) |
 | `unity_instantiate_prefab` | Place a prefab into the scene |
@@ -219,7 +263,8 @@ Add this to Antigravity's MCP config (via the Agent panel → MCP servers → *v
 
 - **Assign a sprite:** pass `Assets/Sprites/atlas.png#SpriteName` to `unity_set_property` — sub-assets resolve automatically.
 - **ScriptableObject fields:** call `unity_set_property` with the `assetPath` parameter.
-- **UI verification:** after layout work, call `unity_capture_screenshot`; Screen Space Overlay canvases are included (settings auto-restored afterward).
+- **UI verification:** after layout work, call `unity_capture_screenshot`. Stopped, `source:"camera"` temporarily reparents Screen Space Overlay canvases and restores them afterward; while playing, `source:"screen"` captures the composited frame without touching anything.
+- **Inspecting one sprite:** `unity_capture_screenshot` with `isolate:"Enemy/Sprite"` and a small `width` renders that object alone on a flat background — the cheapest way to check art.
 - **Pixel art:** use `unity_set_texture_import_settings` with `filterMode: "Point"`.
 
 ### Unity version compatibility
@@ -237,9 +282,11 @@ Unity **6.2** turned `Object.GetInstanceID()` / `EditorUtility.InstanceIDToObjec
 
 ### Roadmap
 
+**Done in v5:** incremental console reads (`since`/`cursor`) · repeated logs collapsed into a `count` · batch object creation · Game View backbuffer capture (`source:"screen"`) · isolated object rendering (`isolate`) · tool groups (`UNITY_MCP_TOOLS`) · English tool descriptions and runtime messages throughout.
+
 **Done in v4:** blend trees · animator sub-state machines · rule tiles (auto-tiling) · particle systems · terrain (create / heightmaps / layers).
 
-**v5 ideas:** Tile Palette assets · animation events · Timeline · lighting/bake control · NavMesh baking.
+**v6 ideas:** Tile Palette assets · animation events · Timeline · lighting/bake control · NavMesh baking.
 
 ### License
 
@@ -277,7 +324,7 @@ Claude Code / Antigravity  ─MCP(stdio)→  server.js  ─TCP:6400→  Unity Ed
 #### 1) Unity tarafı
 1. `UnityPackage/Editor/McpBridge.cs` dosyasını projene kopyala: `Assets/Editor/McpBridge.cs`.
 2. Newtonsoft JSON paketinin kurulu olduğundan emin ol. Yoksa: **Window > Package Manager > + > Add package by name** → `com.unity.nuget.newtonsoft-json`.
-3. Derleme bitince Console'da şunu görmelisin: `[MCP Bridge] Dinleniyor: 127.0.0.1:6400`. Görünmüyorsa: **Tools > MCP Bridge > Restart Server**.
+3. Derleme bitince Console'da şunu görmelisin: `[MCP Bridge] Listening on 127.0.0.1:6400`. Görünmüyorsa: **Tools > MCP Bridge > Restart Server**.
 
 #### 2) MCP sunucusu
 ```bash
@@ -306,11 +353,43 @@ Antigravity'nin MCP config'ine ekle (Agent paneli → MCP servers → *view raw 
 }
 ```
 
+### Araç listesini kısaltma (token maliyeti)
+
+52 aracın şeması her oturumun başında ajana yaklaşık **8.8k token**'a mal olur
+ve çoğu proje terrain ya da blend tree'ye hiç dokunmaz. `UNITY_MCP_TOOLS` ile
+sadece ihtiyacın olan grupları aç — `core` her zaman dahildir, yani ajan hiçbir
+zaman temel araçsız kalmaz:
+
+| Ayar | Araç | Şema maliyeti |
+|---|---|---|
+| *(boş)* veya `all` | 52 | ~8.8k token |
+| `core` | 19 | ~3.1k token |
+| `core,tilemap` | 23 | ~3.9k token |
+| `assets,anim` | 33 | ~6.2k token |
+
+**Gruplar:** `core` (sahne/nesne/component, konsol, script, play mode, ekran
+görüntüsü) · `scenes` · `assets` · `prefabs` · `anim` · `tilemap` · `terrain`.
+Tek tek araç adı da verebilirsin: `UNITY_MCP_TOOLS=core,unity_create_terrain`.
+
+```jsonc
+{
+  "mcpServers": {
+    "unity": {
+      "command": "node",
+      "args": ["/tam/yol/unity-mcp/mcp-server/server.js"],
+      "env": { "UNITY_MCP_TOOLS": "core,assets,ui" }
+    }
+  }
+}
+```
+
+Açılış satırı neyin aktif olduğunu söyler: `[unity-mcp] ready — Unity 127.0.0.1:6400 — 19 tools (UNITY_MCP_TOOLS=core)`.
+
 ### Araç listesi
 
-**Görme & okuma:** `unity_get_scene`, `unity_get_object`, `unity_get_material`, `unity_get_asset`, `unity_find_assets`, `unity_read_file`, `unity_read_console`, `unity_capture_screenshot` (model görüntüyü **görür**).
+**Görme & okuma:** `unity_get_scene`, `unity_get_object` (tag ve layer dahil), `unity_get_material`, `unity_get_asset`, `unity_find_assets`, `unity_read_file`, `unity_read_console` (**artımlı**: `since` + `cursor`, tekrar eden loglar `count` ile tek satıra iner), `unity_capture_screenshot` (model görüntüyü **görür**; `source:"screen"` canlı Game View'ı olduğu gibi alır, `isolate:"Yol"` tek nesneyi yalıtıp render eder).
 
-**Sahne & nesne:** `unity_create_object`, `unity_delete_object`, `unity_set_transform`, `unity_instantiate_prefab`, `unity_add_component`, `unity_remove_component`, `unity_set_property`, `unity_save_as_prefab`.
+**Sahne & nesne:** `unity_create_object`, `unity_create_objects` (tek çağrıda **çok** nesne; ortak varsayılanlar + nesne başına override, bozuk bir öğe partiyi durdurmaz), `unity_delete_object`, `unity_set_transform`, `unity_instantiate_prefab`, `unity_add_component`, `unity_remove_component`, `unity_set_property`, `unity_save_as_prefab`.
 
 **Kod:** `unity_create_script`, `unity_read_console` (yaz → kontrol et → düzelt döngüsü).
 
@@ -350,7 +429,8 @@ Antigravity'nin MCP config'ine ekle (Agent paneli → MCP servers → *view raw 
 
 - **Sprite atama:** `unity_set_property`'ye `Assets/Sprites/atlas.png#SpriteAdi` ver — alt-asset'ler otomatik çözülür.
 - **ScriptableObject alanları:** `unity_set_property`'yi `assetPath` parametresiyle çağır.
-- **UI doğrulama:** yerleşim işlerinden sonra `unity_capture_screenshot` çağır; Screen Space Overlay canvas'lar dahil edilir (ayarlar sonra otomatik geri yüklenir).
+- **UI doğrulama:** yerleşim işlerinden sonra `unity_capture_screenshot` çağır. Editördeyken `source:"camera"` Screen Space Overlay canvas'ları geçici olarak taşıyıp sonra geri yükler; play mode'dayken `source:"screen"` birleştirilmiş kareyi hiçbir şeye dokunmadan alır.
+- **Tek sprite'a bakmak:** `unity_capture_screenshot`'ı `isolate:"Enemy/Sprite"` ve küçük bir `width` ile çağır — nesneyi düz zeminde tek başına render eder, görseli kontrol etmenin en ucuz yolu.
 - **Pixel art:** `unity_set_texture_import_settings` ile `filterMode: "Point"`.
 
 ### Unity sürüm uyumu
@@ -368,9 +448,11 @@ Unity **6.2**, `Object.GetInstanceID()` / `EditorUtility.InstanceIDToObject()`'i
 
 ### Yol haritası
 
+**v5'te tamamlandı:** artımlı konsol okuma (`since`/`cursor`) · tekrar eden logların `count` ile toplanması · toplu nesne oluşturma · Game View backbuffer yakalama (`source:"screen"`) · yalıtılmış nesne render'ı (`isolate`) · araç grupları (`UNITY_MCP_TOOLS`) · tüm araç açıklamaları ve çalışma zamanı mesajları İngilizce.
+
 **v4'te tamamlandı:** blend tree'ler · animator alt-state machine'leri · rule tile'lar (auto-tiling) · particle system'ler · terrain (oluşturma / yükseklik haritası / katmanlar).
 
-**v5 fikirleri:** Tile Palette asset'leri · animation event'ler · Timeline · aydınlatma/bake kontrolü · NavMesh bake.
+**v6 fikirleri:** Tile Palette asset'leri · animation event'ler · Timeline · aydınlatma/bake kontrolü · NavMesh bake.
 
 ### Lisans
 

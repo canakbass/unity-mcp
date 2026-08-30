@@ -11,6 +11,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Reflection;
 using System.Threading;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -114,7 +115,7 @@ namespace McpUnity
                 _running = true;
                 _listenThread = new Thread(ListenLoop) { IsBackground = true, Name = "McpBridgeListener" };
                 _listenThread.Start();
-                Debug.Log($"[MCP Bridge] Dinleniyor: 127.0.0.1:{Port}");
+                Debug.Log($"[MCP Bridge] Listening on 127.0.0.1:{Port}");
             }
             catch (Exception e)
             {
@@ -159,7 +160,7 @@ namespace McpUnity
                         try { req = JObject.Parse(line); }
                         catch (Exception e)
                         {
-                            lock (writeLock) writer.WriteLine(new JObject { ["error"] = "JSON parse hatasi: " + e.Message }.ToString(Formatting.None));
+                            lock (writeLock) writer.WriteLine(new JObject { ["error"] = "JSON parse error: " + e.Message }.ToString(Formatting.None));
                             continue;
                         }
                         Queue.Enqueue(new Pending { Request = req, Writer = writer, WriteLock = writeLock });
@@ -237,13 +238,13 @@ namespace McpUnity
                 case "close_prefab": return ClosePrefabCmd(p);
                 // ---- v2: Goruntu ----
                 case "capture_screenshot": return CaptureScreenshot(p);
-                case "execute_menu": return EditorApplication.ExecuteMenuItem((string)p["path"]) ? "calistirildi" : throw new Exception("Menu bulunamadi: " + p["path"]);
+                case "execute_menu": return EditorApplication.ExecuteMenuItem((string)p["path"]) ? "calistirildi" : throw new Exception("Menu item not found: " + p["path"]);
                 // ---- v2.1: prefab / build ----
                 case "save_as_prefab": return SaveAsPrefab(p);
                 case "set_build_settings_scenes": return SetBuildSettingsScenes(p);
                 // ---- v3: Play mode ----
                 case "play": EditorApplication.EnterPlaymode(); return "play mode baslatiliyor";
-                case "stop": EditorApplication.ExitPlaymode(); return "play mode durduruluyor";
+                case "stop": EditorApplication.ExitPlaymode(); return "stopping play mode";
                 case "pause": EditorApplication.isPaused = Has(p, "paused") ? (bool)p["paused"] : !EditorApplication.isPaused; return EditorApplication.isPaused ? "duraklatildi" : "devam ettirildi";
                 case "step": EditorApplication.Step(); return "bir kare ilerletildi";
                 case "get_play_state": return GetPlayState();
@@ -269,7 +270,7 @@ namespace McpUnity
                 case "create_terrain": return CreateTerrain(p);
                 case "set_terrain_heights": return SetTerrainHeights(p);
                 case "add_terrain_layer": return AddTerrainLayer(p);
-                default: throw new Exception("Bilinmeyen method: " + method);
+                default: throw new Exception("Unknown method: " + method);
             }
         }
 
@@ -336,15 +337,15 @@ namespace McpUnity
                 if (obj != null) return obj;
                 var comp = IIDToObject((long)p["instanceId"]) as Component;
                 if (comp != null) return comp.gameObject;
-                throw new Exception("instanceId ile GameObject bulunamadi: " + p["instanceId"]);
+                throw new Exception("No GameObject with instanceId: " + p["instanceId"]);
             }
             if (Has(p, "path"))
             {
                 var go = FindByPath((string)p["path"]);
-                if (go == null) throw new Exception("Hiyerarsi yolunda nesne yok: " + p["path"]);
+                if (go == null) throw new Exception("No object at hierarchy path: " + p["path"]);
                 return go;
             }
-            throw new Exception("instanceId veya path gerekli.");
+            throw new Exception("instanceId or path is required.");
         }
 
         // Prefab modu dahil tum yuklu sahnelerde hiyerarsi yoluyla arar
@@ -390,7 +391,7 @@ namespace McpUnity
                 if (byShort == null && t.Name == name) byShort = t;
             }
             if (byShort != null) return byShort;
-            throw new Exception("Tip bulunamadi: " + name);
+            throw new Exception("Type not found: " + name);
         }
 
         static Type FindType(string name) => FindAnyType(name, typeof(Component));
@@ -480,6 +481,8 @@ namespace McpUnity
                 ["name"] = go.name,
                 ["instanceId"] = GetIID(go),
                 ["active"] = go.activeSelf,
+                ["tag"] = go.tag,
+                ["layer"] = LayerMask.LayerToName(go.layer),
                 ["position"] = Vec3(go.transform.position),
                 ["rotationEuler"] = Vec3(go.transform.eulerAngles),
                 ["scale"] = Vec3(go.transform.localScale),
@@ -543,7 +546,7 @@ namespace McpUnity
         static JToken CreateObjects(JObject p)
         {
             var items = p["items"] as JArray;
-            if (items == null || items.Count == 0) throw new Exception("items bos");
+            if (items == null || items.Count == 0) throw new Exception("items is empty");
 
             var shared = p["shared"] as JObject;
             var created = new JArray();
@@ -618,7 +621,7 @@ namespace McpUnity
             var go = ResolveGameObject(p);
             var type = FindType((string)p["componentType"]);
             var comp = go.GetComponent(type);
-            if (comp == null) throw new Exception("Component nesnede yok: " + type.Name);
+            if (comp == null) throw new Exception("Object has no such component: " + type.Name);
             Undo.DestroyObjectImmediate(comp);
             return "kaldirildi: " + type.Name;
         }
@@ -637,11 +640,11 @@ namespace McpUnity
                 var type = FindType((string)p["componentType"]);
                 target = go.GetComponent(type);
             }
-            if (target == null) throw new Exception("Hedef bulunamadi (component ya da asset).");
+            if (target == null) throw new Exception("Target not found (component or asset).");
 
             var so = new SerializedObject(target);
             var sp = so.FindProperty((string)p["propertyPath"]);
-            if (sp == null) throw new Exception("Property bulunamadi: " + p["propertyPath"] + " (get_object ile dogru propertyPath'i gorebilirsin)");
+            if (sp == null) throw new Exception("Property not found: " + p["propertyPath"] + " (get_object ile dogru propertyPath'i gorebilirsin)");
 
             var val = p["value"];
             switch (sp.propertyType)
@@ -658,7 +661,7 @@ namespace McpUnity
                     if (val.Type == JTokenType.String)
                     {
                         int idx = Array.IndexOf(sp.enumDisplayNames, (string)val);
-                        if (idx < 0) throw new Exception("Enum degeri yok: " + val + ". Secenekler: " + string.Join(", ", sp.enumDisplayNames));
+                        if (idx < 0) throw new Exception("No such enum value: " + val + ". Secenekler: " + string.Join(", ", sp.enumDisplayNames));
                         sp.enumValueIndex = idx;
                     }
                     else sp.enumValueIndex = (int)val;
@@ -672,7 +675,7 @@ namespace McpUnity
                     }
                     break;
                 default:
-                    throw new Exception("Desteklenmeyen property tipi: " + sp.propertyType);
+                    throw new Exception("Unsupported property type: " + sp.propertyType);
             }
             so.ApplyModifiedProperties();
             EditorUtility.SetDirty(target);
@@ -684,7 +687,7 @@ namespace McpUnity
         {
             string path = (string)p["assetPath"];
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
-            if (prefab == null) throw new Exception("Prefab bulunamadi: " + path + " (find_assets ile arayabilirsin)");
+            if (prefab == null) throw new Exception("Prefab not found: " + path + " (find_assets ile arayabilirsin)");
             var go = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
             if (p["name"] != null) go.name = (string)p["name"];
             if (p["position"] != null) go.transform.position = ToVec3(p["position"]);
@@ -712,19 +715,19 @@ namespace McpUnity
         static JToken CreateScript(JObject p)
         {
             string rel = (string)p["path"]; // ornn: "Scripts/PlayerController.cs"
-            if (string.IsNullOrEmpty(rel) || !rel.EndsWith(".cs")) throw new Exception("path 'Klasor/Dosya.cs' bicimin de olmali.");
+            if (string.IsNullOrEmpty(rel) || !rel.EndsWith(".cs")) throw new Exception("path must look like 'Folder/File.cs'.");
             string full = Path.Combine(Application.dataPath, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(full));
             File.WriteAllText(full, (string)p["content"], new UTF8Encoding(false));
             AssetDatabase.Refresh();
-            return "yazildi: Assets/" + rel + " — derleme baslatildi, hatalar icin read_console kullan.";
+            return "yazildi: Assets/" + rel + " — compilation started, call read_console for errors.";
         }
 
         static JToken ReadFile(JObject p)
         {
             string rel = (string)p["path"];
             string full = Path.Combine(Application.dataPath, rel);
-            if (!File.Exists(full)) throw new Exception("Dosya yok: Assets/" + rel);
+            if (!File.Exists(full)) throw new Exception("No such file: Assets/" + rel);
             return File.ReadAllText(full);
         }
 
@@ -788,7 +791,7 @@ namespace McpUnity
             if (m.Success) expected = m.Groups[1].Value;
 
             var all = AssetDatabase.LoadAllAssetsAtPath(path);
-            if (all == null || all.Length == 0) throw new Exception("Asset yolu bulunamadi: " + path);
+            if (all == null || all.Length == 0) throw new Exception("Asset path not found: " + path);
 
             UnityEngine.Object best = null;
             foreach (var a in all)
@@ -800,7 +803,7 @@ namespace McpUnity
                 if (best == null && nameOk) best = a;
             }
             if (best == null) best = AssetDatabase.LoadMainAssetAtPath(path);
-            if (best == null) throw new Exception("Uygun asset bulunamadi: " + spec + (expected != null ? " (beklenen tip: " + expected + ")" : ""));
+            if (best == null) throw new Exception("No matching asset: " + spec + (expected != null ? " (beklenen tip: " + expected + ")" : ""));
             return best;
         }
 
@@ -812,7 +815,7 @@ namespace McpUnity
 
         static string NormalizeAssetPath(string path, string ext)
         {
-            if (string.IsNullOrEmpty(path)) throw new Exception("path gerekli.");
+            if (string.IsNullOrEmpty(path)) throw new Exception("path is required.");
             path = path.Replace('\\', '/');
             if (!path.StartsWith("Assets/")) path = "Assets/" + path;
             if (!path.EndsWith(ext)) path += ext;
@@ -844,7 +847,7 @@ namespace McpUnity
                 var s = Shader.Find(c);
                 if (s != null) return s;
             }
-            throw new Exception("Shader bulunamadi. Denenenler: " + string.Join(", ", candidates));
+            throw new Exception("Shader not found. Tried: " + string.Join(", ", candidates));
         }
 
         static JToken CreateMaterial(JObject p)
@@ -865,7 +868,7 @@ namespace McpUnity
         {
             string path = (string)p["path"];
             var mat = AssetDatabase.LoadAssetAtPath<Material>(path);
-            if (mat == null) throw new Exception("Material bulunamadi: " + path + " (find_assets 't:Material' ile arayabilirsin)");
+            if (mat == null) throw new Exception("Material not found: " + path + " (find_assets 't:Material' ile arayabilirsin)");
             return mat;
         }
 
@@ -882,7 +885,7 @@ namespace McpUnity
                     string name = kv.Key;
                     var val = kv.Value;
                     if (!mat.HasProperty(name))
-                        throw new Exception("Material'de property yok: " + name + " (get_material ile mevcutlari gorebilirsin)");
+                        throw new Exception("Material has no property: " + name + " (get_material ile mevcutlari gorebilirsin)");
                     if (val.Type == JTokenType.Array)
                     {
                         var a = (JArray)val;
@@ -944,7 +947,7 @@ namespace McpUnity
         {
             var type = FindAnyType((string)p["typeName"], typeof(ScriptableObject));
             if (!typeof(ScriptableObject).IsAssignableFrom(type))
-                throw new Exception(type.Name + " bir ScriptableObject degil.");
+                throw new Exception(type.Name + " is not a ScriptableObject.");
             string path = NormalizeAssetPath((string)p["assetPath"], ".asset");
             var so = ScriptableObject.CreateInstance(type);
             AssetDatabase.CreateAsset(so, path);
@@ -956,7 +959,7 @@ namespace McpUnity
         {
             string path = (string)p["assetPath"];
             var asset = AssetDatabase.LoadMainAssetAtPath(path);
-            if (asset == null) throw new Exception("Asset bulunamadi: " + path);
+            if (asset == null) throw new Exception("Asset not found: " + path);
             var props = new JObject();
             var so = new SerializedObject(asset);
             var it = so.GetIterator();
@@ -986,7 +989,7 @@ namespace McpUnity
                 var sc = SceneManager.GetSceneAt(i);
                 if (sc.path == s || sc.name == s) return sc;
             }
-            throw new Exception("Yuklu sahne bulunamadi: " + s + " (list_scenes ile kontrol et)");
+            throw new Exception("No loaded scene named: " + s + " (list_scenes ile kontrol et)");
         }
 
         static JToken ListScenes()
@@ -1031,7 +1034,7 @@ namespace McpUnity
         static JToken CloseScene(JObject p)
         {
             var scene = SceneByPathOrName((string)p["path"]);
-            if (SceneManager.sceneCount <= 1) throw new Exception("Son acik sahne kapatilamaz.");
+            if (SceneManager.sceneCount <= 1) throw new Exception("Cannot close the last open scene.");
             if (Has(p, "save") && (bool)p["save"]) EditorSceneManager.SaveScene(scene);
             EditorSceneManager.CloseScene(scene, true);
             return "kapatildi";
@@ -1064,7 +1067,7 @@ namespace McpUnity
         static PrefabStage RequireStage()
         {
             var stage = PrefabStageUtility.GetCurrentPrefabStage();
-            if (stage == null) throw new Exception("Prefab modu acik degil. Once open_prefab cagir.");
+            if (stage == null) throw new Exception("Not in prefab mode. Call open_prefab first.");
             return stage;
         }
 
@@ -1078,7 +1081,7 @@ namespace McpUnity
         static JToken ClosePrefabCmd(JObject p)
         {
             var stage = PrefabStageUtility.GetCurrentPrefabStage();
-            if (stage == null) return "prefab modu zaten kapali";
+            if (stage == null) return "prefab mode was already closed";
             bool save = !Has(p, "save") || (bool)p["save"];
             if (save) PrefabUtility.SaveAsPrefabAsset(stage.prefabContentsRoot, stage.assetPath);
             StageUtility.GoToMainStage();
@@ -1091,17 +1094,27 @@ namespace McpUnity
         static JToken CaptureScreenshot(JObject p)
         {
             string view = (string)p["view"] ?? "game";
+            string source = (string)p["source"] ?? "camera";
             int w = Has(p, "width") ? (int)p["width"] : 960;
             int h = Has(p, "height") ? (int)p["height"] : 540;
             w = Mathf.Clamp(w, 64, 1920);
             h = Mathf.Clamp(h, 64, 1080);
 
+            // Isolate a single object: verify a prefab or sprite without the rest
+            // of the scene getting in the way.
+            if (Has(p, "isolate")) return RenderIsolated((string)p["isolate"], w, h, p);
+
             if (view == "scene")
             {
                 var sv = SceneView.lastActiveSceneView;
-                if (sv == null || sv.camera == null) throw new Exception("Acik bir Scene View yok.");
+                if (sv == null || sv.camera == null) throw new Exception("No Scene View is open.");
                 return RenderCameraToPng(sv.camera, w, h, false);
             }
+
+            // source='screen' reads the composited Game View image. It does NOT
+            // re-render from a camera, so it touches nothing: post-processing, overlay
+            // UI and multi-camera stacks appear exactly as they do on screen.
+            if (source == "screen") return CaptureBackbuffer(w, h);
 
             var cam = Camera.main;
             if (cam == null)
@@ -1109,8 +1122,158 @@ namespace McpUnity
                 var cams = FindAll<Camera>();
                 cam = cams.FirstOrDefault(c => c.enabled) ?? cams.FirstOrDefault();
             }
-            if (cam == null) throw new Exception("Sahnede kamera yok. Once bir Camera olustur.");
+            if (cam == null) throw new Exception("No camera in the scene. Create one first.");
             return RenderCameraToPng(cam, w, h, true);
+        }
+
+        // Grabs the composited Game View image and rescales it to the requested size.
+        //
+        // ScreenCapture.CaptureScreenshotAsTexture() is NOT usable here: inside the
+        // editor it returns whatever window was drawn last (usually the Scene View,
+        // chrome and all), not the Game View. The Game View renders into a
+        // RenderTexture owned by the internal PlayModeView window, so we read that
+        // directly - it is the true composited frame, post-processing and overlay UI
+        // included, and grabbing it disturbs nothing.
+        static JToken CaptureBackbuffer(int w, int h)
+        {
+            var src = GameViewTexture();
+            if (src == null)
+                throw new Exception("Could not reach the Game View render texture. Make sure a Game View window is open, or use source='camera'.");
+
+            // Keep the Game View's aspect ratio. Squeezing a 21:9 view into a
+            // requested 16:9 box would hand the model a distorted picture, so treat
+            // width as the budget and derive height from the real frame.
+            h = Mathf.Clamp(Mathf.RoundToInt(w * src.height / (float)src.width), 64, 1080);
+
+            RenderTexture rt = null;
+            var prevActive = RenderTexture.active;
+            try
+            {
+                rt = RenderTexture.GetTemporary(w, h, 0);
+                Graphics.Blit(src, rt);
+                RenderTexture.active = rt;
+                var tex = new Texture2D(w, h, TextureFormat.RGB24, false);
+                tex.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+                tex.Apply();
+                var png = tex.EncodeToPNG();
+                UnityEngine.Object.DestroyImmediate(tex);
+                return new JObject
+                {
+                    ["format"] = "png",
+                    ["width"] = w,
+                    ["height"] = h,
+                    ["source"] = "screen",
+                    ["nativeWidth"] = src.width,
+                    ["nativeHeight"] = src.height,
+                    ["base64"] = Convert.ToBase64String(png)
+                };
+            }
+            finally
+            {
+                RenderTexture.active = prevActive;
+                if (rt != null) RenderTexture.ReleaseTemporary(rt);
+            }
+        }
+
+        // PlayModeView is internal, so reach it by reflection and tolerate Unity
+        // renaming things: try the property first, then the known backing fields.
+        static RenderTexture GameViewTexture()
+        {
+            var t = typeof(EditorWindow).Assembly.GetType("UnityEditor.PlayModeView");
+            if (t == null) return null;
+
+            const BindingFlags any = BindingFlags.Static | BindingFlags.Instance
+                                   | BindingFlags.Public | BindingFlags.NonPublic;
+
+            var getMain = t.GetMethod("GetMainPlayModeView", any, null, Type.EmptyTypes, null);
+            var view = getMain != null ? getMain.Invoke(null, null) : null;
+            if (view == null) return null;
+
+            var prop = t.GetProperty("targetTexture", any);
+            if (prop != null && prop.CanRead)
+            {
+                var rt = prop.GetValue(view) as RenderTexture;
+                if (rt != null) return rt;
+            }
+            foreach (var name in new[] { "m_TargetTexture", "m_RenderTexture" })
+            {
+                var f = t.GetField(name, any);
+                var rt = f != null ? f.GetValue(view) as RenderTexture : null;
+                if (rt != null) return rt;
+            }
+            return null;
+        }
+
+        // Renders one GameObject on its own. Moves it (and its children) onto an
+        // unused layer, points a throwaway camera at just that layer, then puts
+        // every layer back exactly as it was.
+        static JToken RenderIsolated(string target, int w, int h, JObject p)
+        {
+            var go = FindByPath(target);
+            if (go == null) throw new Exception("GameObject not found: " + target);
+
+            var renderers = go.GetComponentsInChildren<Renderer>(false);
+            if (renderers.Length == 0)
+                throw new Exception("'" + target + "' has no enabled Renderer to isolate.");
+
+            var bounds = renderers[0].bounds;
+            foreach (var r in renderers) bounds.Encapsulate(r.bounds);
+
+            int layer = FreeLayer();
+            var moved = new List<KeyValuePair<GameObject, int>>();
+            GameObject camGo = null;
+            try
+            {
+                foreach (var t in go.GetComponentsInChildren<Transform>(true))
+                {
+                    moved.Add(new KeyValuePair<GameObject, int>(t.gameObject, t.gameObject.layer));
+                    t.gameObject.layer = layer;
+                }
+
+                camGo = new GameObject("~McpIsolateCam") { hideFlags = HideFlags.HideAndDontSave };
+                var cam = camGo.AddComponent<Camera>();
+                cam.cullingMask = 1 << layer;
+                cam.clearFlags = CameraClearFlags.SolidColor;
+                cam.backgroundColor = ParseColor((string)p["background"], new Color(0.07f, 0.07f, 0.10f, 1f));
+                cam.orthographic = true;
+
+                // Fit the bounds into the frame with a small margin, honouring aspect.
+                const float pad = 1.15f;
+                float halfH = Mathf.Max(bounds.extents.y, bounds.extents.x * h / (float)w) * pad;
+                cam.orthographicSize = Mathf.Max(halfH, 0.01f);
+                float dist = Mathf.Max(bounds.extents.z * 2f, 5f) + 10f;
+                camGo.transform.position = bounds.center + Vector3.back * dist;
+                camGo.transform.rotation = Quaternion.identity;
+                cam.nearClipPlane = 0.01f;
+                cam.farClipPlane = dist * 4f;
+
+                var res = (JObject)RenderCameraToPng(cam, w, h, false);
+                res["isolated"] = go.name;
+                res["renderers"] = renderers.Length;
+                res["boundsSize"] = bounds.size.x.ToString("0.##") + "x" + bounds.size.y.ToString("0.##");
+                return res;
+            }
+            finally
+            {
+                foreach (var m in moved) if (m.Key != null) m.Key.layer = m.Value;
+                if (camGo != null) UnityEngine.Object.DestroyImmediate(camGo);
+            }
+        }
+
+        // Finds a layer no active object sits on, so isolation cannot catch strays.
+        static int FreeLayer()
+        {
+            var used = new bool[32];
+            foreach (var t in FindAll<Transform>()) used[t.gameObject.layer] = true;
+            for (int i = 31; i >= 8; i--) if (!used[i]) return i;
+            return 31;
+        }
+
+        static Color ParseColor(string hex, Color fallback)
+        {
+            if (string.IsNullOrEmpty(hex)) return fallback;
+            Color c;
+            return ColorUtility.TryParseHtmlString(hex.StartsWith("#") ? hex : "#" + hex, out c) ? c : fallback;
         }
 
         static JToken RenderCameraToPng(Camera cam, int w, int h, bool includeOverlayCanvases)
@@ -1185,7 +1348,7 @@ namespace McpUnity
         static JToken SetBuildSettingsScenes(JObject p)
         {
             var arr = p["scenes"] as JArray;
-            if (arr == null) throw new Exception("scenes dizi parametresi gerekli.");
+            if (arr == null) throw new Exception("the scenes array parameter is required.");
             var scenes = new List<EditorBuildSettingsScene>();
             foreach (var token in arr) scenes.Add(new EditorBuildSettingsScene((string)token, true));
             EditorBuildSettings.scenes = scenes.ToArray();
@@ -1239,7 +1402,7 @@ namespace McpUnity
         {
             string path = (string)p["assetPath"];
             var imp = AssetImporter.GetAtPath(path) as TextureImporter;
-            if (imp == null) throw new Exception("TextureImporter bulunamadi (dosya bir texture/sprite mi?): " + path);
+            if (imp == null) throw new Exception("No TextureImporter (is the file a texture/sprite?): " + path);
             if (Has(p, "textureType")) imp.textureType = (TextureImporterType)Enum.Parse(typeof(TextureImporterType), (string)p["textureType"], true);
             if (Has(p, "spriteMode")) imp.spriteImportMode = (SpriteImportMode)Enum.Parse(typeof(SpriteImportMode), (string)p["spriteMode"], true);
             if (Has(p, "pixelsPerUnit")) imp.spritePixelsPerUnit = (float)p["pixelsPerUnit"];
@@ -1265,7 +1428,7 @@ namespace McpUnity
         {
             var go = ResolveGameObject(p);
             var tm = go.GetComponent<Tilemap>();
-            if (tm == null) throw new Exception("Nesnede Tilemap component'i yok: " + go.name);
+            if (tm == null) throw new Exception("Object has no Tilemap component: " + go.name);
             return tm;
         }
 
@@ -1304,10 +1467,10 @@ namespace McpUnity
             if (Has(p, "tileAssetPath"))
             {
                 shared = AssetDatabase.LoadAssetAtPath<TileBase>((string)p["tileAssetPath"]);
-                if (shared == null) throw new Exception("Tile asset bulunamadi: " + p["tileAssetPath"]);
+                if (shared == null) throw new Exception("Tile asset not found: " + p["tileAssetPath"]);
             }
             var cells = p["cells"] as JArray;
-            if (cells == null) throw new Exception("cells dizisi gerekli: [{x,y,z?,tileAssetPath?}, ...]");
+            if (cells == null) throw new Exception("the cells array is required: [{x,y,z?,tileAssetPath?}, ...]");
             Undo.RegisterCompleteObjectUndo(tm, "MCP SetTiles");
             int count = 0;
             foreach (var cellTok in cells)
@@ -1318,7 +1481,7 @@ namespace McpUnity
                 if (Has(cell, "tileAssetPath"))
                 {
                     t = AssetDatabase.LoadAssetAtPath<TileBase>((string)cell["tileAssetPath"]);
-                    if (t == null) throw new Exception("Tile asset bulunamadi: " + cell["tileAssetPath"]);
+                    if (t == null) throw new Exception("Tile asset not found: " + cell["tileAssetPath"]);
                 }
                 if (t == null) throw new Exception("Tile belirtilmedi: tileAssetPath ya global ver ya da her hucrede.");
                 tm.SetTile(new Vector3Int(x, y, z), t);
@@ -1334,7 +1497,7 @@ namespace McpUnity
         static JToken CreateSpriteAnimation(JObject p)
         {
             var frames = p["sprites"] as JArray;
-            if (frames == null || frames.Count == 0) throw new Exception("sprites dizisi gerekli (sprite spec listesi, orn 'Assets/atlas.png#run_0').");
+            if (frames == null || frames.Count == 0) throw new Exception("the sprites array is required (sprite specs, e.g. 'Assets/atlas.png#run_0').");
             float fps = Has(p, "frameRate") ? (float)p["frameRate"] : 12f;
             var clip = new AnimationClip { frameRate = fps };
             var keys = new ObjectReferenceKeyframe[frames.Count];
@@ -1361,7 +1524,7 @@ namespace McpUnity
             float fps = Has(p, "frameRate") ? (float)p["frameRate"] : 60f;
             var clip = new AnimationClip { frameRate = fps };
             var curves = p["curves"] as JArray;
-            if (curves == null || curves.Count == 0) throw new Exception("curves dizisi gerekli: [{type, path?, property, keys:[{time,value}]}]");
+            if (curves == null || curves.Count == 0) throw new Exception("the curves array is required: [{type, path?, property, keys:[{time,value}]}]");
             foreach (var cvTok in curves)
             {
                 var cv = (JObject)cvTok;
@@ -1409,7 +1572,7 @@ namespace McpUnity
                     if (Has(st, "clip"))
                     {
                         var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>((string)st["clip"]);
-                        if (clip == null) throw new Exception("Clip bulunamadi: " + st["clip"]);
+                        if (clip == null) throw new Exception("Clip not found: " + st["clip"]);
                         state.motion = clip;
                     }
                     stateMap[sname] = state;
@@ -1421,7 +1584,7 @@ namespace McpUnity
                 foreach (var trTok in trs)
                 {
                     var tr = (JObject)trTok;
-                    if (!stateMap.TryGetValue((string)tr["from"], out var from)) throw new Exception("Gecis kaynak state yok: " + tr["from"]);
+                    if (!stateMap.TryGetValue((string)tr["from"], out var from)) throw new Exception("Transition source state not found: " + tr["from"]);
                     if (!stateMap.TryGetValue((string)tr["to"], out var to)) throw new Exception("Gecis hedef state yok: " + tr["to"]);
                     var t = from.AddTransition(to);
                     t.hasExitTime = Has(tr, "hasExitTime") && (bool)tr["hasExitTime"];
@@ -1443,7 +1606,7 @@ namespace McpUnity
             var anim = go.GetComponent<Animator>();
             if (anim == null) anim = Undo.AddComponent<Animator>(go);
             var ctrl = AssetDatabase.LoadAssetAtPath<RuntimeAnimatorController>((string)p["controllerPath"]);
-            if (ctrl == null) throw new Exception("Animator Controller bulunamadi: " + p["controllerPath"]);
+            if (ctrl == null) throw new Exception("Animator Controller not found: " + p["controllerPath"]);
             anim.runtimeAnimatorController = ctrl;
             EditorUtility.SetDirty(anim);
             EditorSceneManager.MarkSceneDirty(go.scene);
@@ -1456,7 +1619,7 @@ namespace McpUnity
         static AnimatorController LoadController(JObject p)
         {
             var ctrl = AssetDatabase.LoadAssetAtPath<AnimatorController>((string)p["controllerPath"]);
-            if (ctrl == null) throw new Exception("Animator Controller bulunamadi: " + p["controllerPath"]);
+            if (ctrl == null) throw new Exception("Animator Controller not found: " + p["controllerPath"]);
             return ctrl;
         }
 
@@ -1492,7 +1655,7 @@ namespace McpUnity
                 {
                     var ch = (JObject)chTok;
                     var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>((string)ch["clip"]);
-                    if (clip == null) throw new Exception("Clip bulunamadi: " + ch["clip"]);
+                    if (clip == null) throw new Exception("Clip not found: " + ch["clip"]);
                     if (type == BlendTreeType.Simple1D)
                         tree.AddChild(clip, Has(ch, "threshold") ? (float)ch["threshold"] : 0f);
                     else
@@ -1521,7 +1684,7 @@ namespace McpUnity
                     if (Has(st, "clip"))
                     {
                         var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>((string)st["clip"]);
-                        if (clip == null) throw new Exception("Clip bulunamadi: " + st["clip"]);
+                        if (clip == null) throw new Exception("Clip not found: " + st["clip"]);
                         state.motion = clip;
                     }
                     stateMap[sname] = state;
@@ -1575,7 +1738,7 @@ namespace McpUnity
                     new Vector3Int(-1, -1, 0), new Vector3Int(0, -1, 0), new Vector3Int(1, -1, 0)
                 };
                 var rulesProp = so.FindProperty("m_TilingRules");
-                if (rulesProp == null) throw new Exception("RuleTile.m_TilingRules bulunamadi (paket surumu farkli olabilir).");
+                if (rulesProp == null) throw new Exception("RuleTile.m_TilingRules not found (package version may differ).");
                 rulesProp.arraySize = rules.Count;
                 for (int i = 0; i < rules.Count; i++)
                 {
@@ -1670,7 +1833,7 @@ namespace McpUnity
         {
             var go = ResolveGameObject(p);
             var terrain = go.GetComponent<Terrain>();
-            if (terrain == null || terrain.terrainData == null) throw new Exception("Nesnede Terrain (veya TerrainData) yok.");
+            if (terrain == null || terrain.terrainData == null) throw new Exception("Object has no Terrain (or TerrainData).");
             var data = terrain.terrainData;
             int res = data.heightmapResolution;
             var heights = new float[res, res];
@@ -1690,7 +1853,7 @@ namespace McpUnity
                         heights[y, x] = (float)row[Math.Min(x * rw / res, rw - 1)];
                 }
             }
-            else throw new Exception("uniform (0-1) ya da heights (2B 0-1 dizisi) gerekli.");
+            else throw new Exception("uniform (0-1) or heights (2D array of 0-1) is required.");
             data.SetHeights(0, 0, heights);
             EditorUtility.SetDirty(data);
             return new JObject { ["resolution"] = res };
@@ -1700,7 +1863,7 @@ namespace McpUnity
         {
             var go = ResolveGameObject(p);
             var terrain = go.GetComponent<Terrain>();
-            if (terrain == null || terrain.terrainData == null) throw new Exception("Nesnede Terrain (veya TerrainData) yok.");
+            if (terrain == null || terrain.terrainData == null) throw new Exception("Object has no Terrain (or TerrainData).");
             var tex = LoadAssetSmart((string)p["texture"], "PPtr<$Texture2D>") as Texture2D;
             if (tex == null) throw new Exception("Texture yuklenemedi: " + p["texture"]);
             var layer = new TerrainLayer { diffuseTexture = tex };

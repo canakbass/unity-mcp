@@ -31,6 +31,25 @@ System.IO.File.WriteAllText("Logs/report.txt", sb.ToString());
 This is cheaper **and** more precise. Verifying "which weapon dealt the most
 damage" by reading `sectorDamage=1395` beats squinting at a health bar.
 
+### 1b. When you do screenshot, pick the cheapest correct source
+
+```json
+{ "source": "screen", "width": 640 }              // playing: the real frame
+{ "source": "camera", "width": 640 }              // stopped: re-render
+{ "isolate": "Enemy/Sprite", "width": 200 }       // one object, alone
+```
+
+- `source:"screen"` reads the Game View image as-is. Post-processing, overlay
+  UI and multi-camera stacks look exactly like the player sees them, and the
+  scene is not touched. It also keeps the Game View aspect ratio, so nothing is
+  stretched.
+- `source:"camera"` (default) re-renders from a camera and temporarily
+  reparents Screen Space Overlay canvases to include UI, restoring them
+  afterwards. Use it when play mode is stopped.
+- `isolate` renders one object on a flat background. To check a sprite, a
+  prefab or a spawned enemy, this is much cheaper and easier to read than a
+  full frame — a 200px isolate costs a fraction of a 960px scene shot.
+
 ### 2. Read the console incrementally
 
 ```json

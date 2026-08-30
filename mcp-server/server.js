@@ -60,6 +60,13 @@ COST — screenshots and console dumps are by far the most expensive calls here:
    effects). For logic or data verification do NOT screenshot: write a report to
    a file from an editor script and read that file instead. It is far cheaper and
    gives exact values instead of a guess from pixels.
+   - While playing, prefer source:"screen". It reads the Game View image as-is,
+     so post-processing and overlay UI are exactly what the player sees, and it
+     modifies nothing. source:"camera" (the default) re-renders and has to
+     reparent overlay canvases, which is fine when stopped.
+   - Checking ONE sprite or prefab? Pass isolate:"Hierarchy/Path" with a small
+     width. Rendering that object alone is far cheaper and clearer than a full
+     frame you then have to squint at.
 2. Always call unity_read_console with a small limit (5) and type:"Error".
    Repeated identical messages are already collapsed with a 'count'. After the
    first read, pass the returned 'cursor' back as 'since' to fetch ONLY new
@@ -99,8 +106,75 @@ function textResult(data) {
   return { content: [{ type: "text", text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }] };
 }
 
+// ---------------- TOOL GROUPS ----------------
+// All 52 tool schemas cost the agent several thousand tokens at the start of
+// every session, and most projects never touch terrain or blend trees.
+// UNITY_MCP_TOOLS takes a comma-separated list of group names (or individual
+// unity_* tool names) and exposes only those. 'core' is always included, so a
+// subset can never leave the agent without the basics. Unset, or 'all', means
+// everything - existing setups keep working untouched.
+//
+//   "env": { "UNITY_MCP_TOOLS": "core,assets,ui" }
+const GROUPS = {
+  core: [
+    "unity_get_scene", "unity_get_object", "unity_create_object", "unity_create_objects",
+    "unity_delete_object", "unity_set_transform", "unity_add_component",
+    "unity_remove_component", "unity_set_property", "unity_read_console",
+    "unity_read_file", "unity_create_script", "unity_execute_menu", "unity_play",
+    "unity_stop", "unity_pause", "unity_step", "unity_get_play_state",
+    "unity_capture_screenshot",
+  ],
+  scenes: [
+    "unity_list_scenes", "unity_open_scene", "unity_new_scene", "unity_close_scene",
+    "unity_set_active_scene", "unity_save_scene", "unity_set_build_settings_scenes",
+  ],
+  assets: [
+    "unity_find_assets", "unity_get_asset", "unity_create_material", "unity_set_material",
+    "unity_get_material", "unity_create_scriptable_object",
+    "unity_set_texture_import_settings",
+  ],
+  prefabs: [
+    "unity_instantiate_prefab", "unity_open_prefab", "unity_save_prefab",
+    "unity_close_prefab", "unity_save_as_prefab",
+  ],
+  anim: [
+    "unity_create_sprite_animation", "unity_create_animation_clip",
+    "unity_create_animator_controller", "unity_assign_animator_controller",
+    "unity_create_blend_tree", "unity_add_animator_sub_state_machine",
+    "unity_create_particle_system",
+  ],
+  tilemap: [
+    "unity_create_tilemap", "unity_create_tile_asset", "unity_set_tiles",
+    "unity_create_rule_tile",
+  ],
+  terrain: ["unity_create_terrain", "unity_set_terrain_heights", "unity_add_terrain_layer"],
+};
+
+const enabledTools = (() => {
+  const spec = (process.env.UNITY_MCP_TOOLS || "").trim();
+  if (!spec || spec === "all") return null; // null = expose everything
+  const set = new Set(GROUPS.core);
+  for (const raw of spec.split(",")) {
+    const key = raw.trim();
+    if (!key) continue;
+    if (GROUPS[key]) GROUPS[key].forEach((n) => set.add(n));
+    else if (key.startsWith("unity_")) set.add(key);
+    else console.error(`[unity-mcp] unknown tool group '${key}' - known: ${Object.keys(GROUPS).join(", ")}`);
+  }
+  return set;
+})();
+
+let registeredCount = 0;
+
+// Single registration gate, so both tool() and direct registrations respect it.
+function register(name, definition, handler) {
+  if (enabledTools && !enabledTools.has(name)) return;
+  registeredCount++;
+  server.registerTool(name, definition, handler);
+}
+
 function tool(name, description, schema, method, mapParams = (a) => a) {
-  server.registerTool(name, { description, inputSchema: schema }, async (args) => {
+  register(name, { description, inputSchema: schema }, async (args) => {
     try {
       return textResult(await callUnity(method, mapParams(args)));
     } catch (e) {
@@ -398,13 +472,28 @@ tool(
 );
 
 // ---------------- v2: EKRAN GORUNTUSU ----------------
-server.registerTool(
+register(
   "unity_capture_screenshot",
   {
     description:
-      "Returns a PNG of the scene as an image the model can see. EXPENSIVE (~2k tokens per call): use it ONLY for VISUAL verification - UI layout, sprite appearance, effects. For logic or numeric verification write a report file from an editor script and read that instead. view: 'game' renders from the main camera (includes Screen Space Overlay canvases), 'scene' renders from the Scene View camera.",
+      "Returns a PNG of the scene as an image the model can see. EXPENSIVE (~2k tokens per call): use it ONLY for VISUAL verification - UI layout, sprite appearance, effects. For logic or numeric verification write a report file from an editor script and read that instead. " +
+      "view: 'game' renders from the main camera, 'scene' from the Scene View camera. " +
+      "source: 'camera' re-renders from a camera (works outside Play Mode; temporarily reparents Screen Space Overlay canvases so UI is included). 'screen' grabs the composited Game View backbuffer - Play Mode only, but it touches nothing and shows post-processing, overlay UI and multi-camera stacks exactly as they appear on screen. Use 'screen' while playing, 'camera' when stopped. " +
+      "isolate: hierarchy path of one object to render alone against a flat background - the cheapest way to check how a single sprite or prefab actually looks.",
     inputSchema: {
       view: z.enum(["game", "scene"]).optional().describe("Default: game"),
+      source: z
+        .enum(["camera", "screen"])
+        .optional()
+        .describe("Default: camera. 'screen' = composited backbuffer, Play Mode only."),
+      isolate: z
+        .string()
+        .optional()
+        .describe("Hierarchy path, e.g. 'Player/Sprite'. Renders only that object."),
+      background: z
+        .string()
+        .optional()
+        .describe("Hex background for isolate, e.g. '#101014'"),
       width: z.number().optional().describe("Default 960, max 1920"),
       height: z.number().optional().describe("Default 540, max 1080"),
     },
@@ -417,9 +506,16 @@ server.registerTool(
           { type: "image", data: r.base64, mimeType: "image/png" },
           {
             type: "text",
-            text: `${r.width}x${r.height} — kamera: ${r.camera || "scene view"}${
-              r.overlayCanvasesIncluded ? `, ${r.overlayCanvasesIncluded} overlay canvas dahil` : ""
-            }`,
+            text: [
+              `${r.width}x${r.height}`,
+              r.source === "screen"
+                ? `backbuffer (native ${r.nativeWidth}x${r.nativeHeight})`
+                : `camera: ${r.camera || "scene view"}`,
+              r.isolated ? `isolated: ${r.isolated} (${r.renderers} renderers, ${r.boundsSize})` : null,
+              r.overlayCanvasesIncluded ? `${r.overlayCanvasesIncluded} overlay canvases included` : null,
+            ]
+              .filter(Boolean)
+              .join(" — "),
           },
         ],
       };
@@ -728,4 +824,7 @@ tool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error(`[unity-mcp] hazir — Unity: ${UNITY_HOST}:${UNITY_PORT}`);
+console.error(
+  `[unity-mcp] ready — Unity ${UNITY_HOST}:${UNITY_PORT} — ${registeredCount} tools` +
+    (enabledTools ? ` (UNITY_MCP_TOOLS=${process.env.UNITY_MCP_TOOLS})` : "")
+);
