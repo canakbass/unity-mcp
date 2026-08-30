@@ -18,7 +18,7 @@ function callUnity(method, params = {}) {
     let buffer = "";
     const timeout = setTimeout(() => {
       socket.destroy();
-      reject(new Error("Unity yanit vermedi (60sn). Editor acik mi? Derleme surüyor olabilir — biraz bekleyip tekrar dene."));
+      reject(new Error("Unity did not respond (60s). Is the editor open? It may still be compiling - wait a moment and retry."));
     }, 60000);
 
     socket.on("connect", () => {
@@ -35,14 +35,14 @@ function callUnity(method, params = {}) {
         if (resp.error) reject(new Error(resp.error));
         else resolve(resp.result);
       } catch (e) {
-        reject(new Error("Unity'den bozuk yanit: " + e.message));
+        reject(new Error("Malformed response from Unity: " + e.message));
       }
     });
     socket.on("error", (e) => {
       clearTimeout(timeout);
       reject(new Error(
         e.code === "ECONNREFUSED"
-          ? "Unity Editor'e baglanilamadi. Unity acik mi ve McpBridge.cs projede mi? (Tools > MCP Bridge > Restart Server)"
+          ? "Cannot reach the Unity Editor. Is Unity open with McpBridge.cs in the project? (Tools > MCP Bridge > Restart Server)"
           : e.message
       ));
     });
@@ -100,7 +100,7 @@ function tool(name, description, schema, method, mapParams = (a) => a) {
     try {
       return textResult(await callUnity(method, mapParams(args)));
     } catch (e) {
-      return { content: [{ type: "text", text: "HATA: " + e.message }], isError: true };
+      return { content: [{ type: "text", text: "ERROR: " + e.message }], isError: true };
     }
   });
 }
@@ -117,10 +117,10 @@ tool(
 
 tool(
   "unity_get_object",
-  "Tek bir nesnenin detayini dondurur: tum component'ler ve serialize edilmis ozellikleri (propertyPath'leriyle). set_property cagirmadan once dogru propertyPath'i bulmak icin kullan.",
+  "Returns details of a single object: all components and their serialized properties (with propertyPaths). Use it before set_property to find the exact propertyPath.",
   {
-    instanceId: z.number().optional().describe("get_scene'den gelen instanceId"),
-    path: z.string().optional().describe("Hiyerarsi yolu, orn: 'Environment/Tree_01'"),
+    instanceId: z.number().optional().describe("instanceId from get_scene"),
+    path: z.string().optional().describe("Hierarchy path, e.g. 'Environment/Tree_01'"),
   },
   "get_object"
 );
@@ -128,13 +128,13 @@ tool(
 // ---------------- NESNE ISLEMLERI ----------------
 tool(
   "unity_create_object",
-  "Sahnede yeni GameObject olusturur. primitive verilirse (Cube, Sphere, Capsule, Cylinder, Plane, Quad) hazir mesh ile gelir.",
+  "Creates a new GameObject in the scene. If `primitive` is given (Cube, Sphere, Capsule, Cylinder, Plane, Quad) it comes with a ready mesh.",
   {
     name: z.string(),
     primitive: z.enum(["Cube", "Sphere", "Capsule", "Cylinder", "Plane", "Quad"]).optional(),
-    parent: z.string().optional().describe("Ebeveyn nesnenin hiyerarsi yolu"),
+    parent: z.string().optional().describe("Hierarchy path of the parent object"),
     position: vec3.optional(),
-    rotation: vec3.optional().describe("Euler acilari"),
+    rotation: vec3.optional().describe("Euler angles"),
     scale: vec3.optional(),
   },
   "create_object"
@@ -142,21 +142,21 @@ tool(
 
 tool(
   "unity_delete_object",
-  "Sahnedeki bir nesneyi siler (Undo destekli).",
+  "Deletes an object from the scene (Undo-aware).",
   { instanceId: z.number().optional(), path: z.string().optional() },
   "delete_object"
 );
 
 tool(
   "unity_set_transform",
-  "Nesnenin pozisyon/rotasyon/olcegini degistirir.",
+  "Sets an object's position / rotation / scale.",
   {
     instanceId: z.number().optional(),
     path: z.string().optional(),
     position: vec3.optional(),
-    rotation: vec3.optional().describe("Euler acilari"),
+    rotation: vec3.optional().describe("Euler angles"),
     scale: vec3.optional(),
-    space: z.enum(["world", "local"]).optional().describe("Varsayilan: world"),
+    space: z.enum(["world", "local"]).optional().describe("Default: world"),
   },
   "set_transform"
 );
@@ -164,7 +164,7 @@ tool(
 // ---------------- COMPONENT ISLEMLERI ----------------
 tool(
   "unity_add_component",
-  "Nesneye component ekler. Tip adi kisa ('Rigidbody') veya tam ('UnityEngine.Rigidbody') olabilir; kendi scriptlerin de calisir.",
+  "Adds a component to an object. The type name may be short ('Rigidbody') or fully qualified ('UnityEngine.Rigidbody'); your own scripts work too.",
   {
     instanceId: z.number().optional(),
     path: z.string().optional(),
@@ -175,7 +175,7 @@ tool(
 
 tool(
   "unity_remove_component",
-  "Nesneden component kaldirir.",
+  "Removes a component from an object.",
   {
     instanceId: z.number().optional(),
     path: z.string().optional(),
@@ -186,11 +186,11 @@ tool(
 
 tool(
   "unity_set_property",
-  "Bir component'in VEYA asset'in (ScriptableObject, prefab) serialize edilmis ozelligini degistirir. Dogru propertyPath icin once unity_get_object / unity_get_asset cagir (orn: 'm_Mass', 'm_Intensity'). Deger tipleri: sayi, bool, string, [x,y,z] vektor, [r,g,b,a] renk, enum adi. Nesne referanslari: asset yolu ('Assets/...'), sprite gibi alt-asset icin 'Assets/atlas.png#SpriteAdi', veya instanceId.",
+  "Sets a serialized property on a component OR an asset (ScriptableObject, prefab). Call unity_get_object / unity_get_asset first to find the exact propertyPath (e.g. 'm_Mass', 'm_Intensity'). Value types: number, bool, string, [x,y,z] vector, [r,g,b,a] color, enum name. Object references: an asset path ('Assets/...'), 'Assets/atlas.png#SpriteName' for a sub-asset such as a sprite, or an instanceId.",
   {
-    componentInstanceId: z.number().optional().describe("Dogrudan component instanceId (tercih edilen)"),
-    assetPath: z.string().optional().describe("Hedef bir asset ise (orn. ScriptableObject) asset yolu"),
-    instanceId: z.number().optional().describe("GameObject instanceId (componentType ile birlikte)"),
+    componentInstanceId: z.number().optional().describe("Component instanceId directly (preferred)"),
+    assetPath: z.string().optional().describe("Asset path when the target is an asset (e.g. a ScriptableObject)"),
+    instanceId: z.number().optional().describe("GameObject instanceId (together with componentType)"),
     path: z.string().optional(),
     componentType: z.string().optional(),
     propertyPath: z.string(),
@@ -202,16 +202,16 @@ tool(
 // ---------------- ASSET / PREFAB ----------------
 tool(
   "unity_find_assets",
-  "Projede asset arar. Filtre ornekleri: 't:Prefab agac', 't:Material', 't:Scene', 't:Script Player'. Asset yollarini dondurur.",
+  "Searches project assets. Filter examples: 't:Prefab tree', 't:Material', 't:Scene', 't:Script Player'. Returns asset paths.",
   { filter: z.string(), limit: z.number().optional() },
   "find_assets"
 );
 
 tool(
   "unity_instantiate_prefab",
-  "Prefab'i sahneye yerlestirir. assetPath icin once unity_find_assets kullan.",
+  "Instantiates a prefab into the scene. Use unity_find_assets first to get its assetPath.",
   {
-    assetPath: z.string().describe("orn: 'Assets/Prefabs/Tree.prefab'"),
+    assetPath: z.string().describe("e.g. 'Assets/Prefabs/Tree.prefab'"),
     name: z.string().optional(),
     position: vec3.optional(),
     rotation: vec3.optional(),
@@ -223,18 +223,18 @@ tool(
 // ---------------- KOD ----------------
 tool(
   "unity_create_script",
-  "Assets altina C# script yazar ve derlemeyi baslatir. Yazdiktan sonra unity_read_console ile derleme hatasi var mi kontrol et. Var olan dosyanin ustune yazar.",
+  "Writes a C# script under Assets and triggers compilation. Check unity_read_console afterwards for compile errors. Overwrites an existing file.",
   {
-    path: z.string().describe("Assets'e gore yol, orn: 'Scripts/PlayerController.cs'"),
-    content: z.string().describe("Dosyanin tam C# icerigi"),
+    path: z.string().describe("Path relative to Assets, e.g. 'Scripts/PlayerController.cs'"),
+    content: z.string().describe("Full C# contents of the file"),
   },
   "create_script"
 );
 
 tool(
   "unity_read_file",
-  "Assets altindaki bir metin dosyasini okur (script duzenlemeden once mevcut icerigi gormek icin).",
-  { path: z.string().describe("Assets'e gore yol") },
+  "Reads a text file under Assets (to inspect current contents before editing a script).",
+  { path: z.string().describe("Path relative to Assets") },
   "read_file"
 );
 
@@ -250,34 +250,34 @@ tool(
   "read_console"
 );
 
-tool("unity_save_scene", "Acik sahneleri kaydeder.", {}, "save_scene");
+tool("unity_save_scene", "Saves the open scenes.", {}, "save_scene");
 
 // ---------------- v2: MATERIAL ----------------
 tool(
   "unity_create_material",
-  "Yeni Material asset'i olusturur. Shader belirtilmezse projeye uygun 2D shader secilir (URP 2D veya Sprites/Default).",
+  "Creates a new Material asset. If no shader is given, a suitable 2D shader is chosen (URP 2D or Sprites/Default).",
   {
-    path: z.string().describe("orn: 'Materials/PlayerMat' (.mat otomatik eklenir)"),
-    shader: z.string().optional().describe("orn: 'Sprites/Default', 'UI/Default'"),
-    color: z.array(z.number()).min(3).max(4).optional().describe("[r,g,b] veya [r,g,b,a], 0-1 arasi"),
+    path: z.string().describe("e.g. 'Materials/PlayerMat' (.mat added automatically)"),
+    shader: z.string().optional().describe("e.g. 'Sprites/Default', 'UI/Default'"),
+    color: z.array(z.number()).min(3).max(4).optional().describe("[r,g,b] or [r,g,b,a], 0-1 arasi"),
   },
   "create_material"
 );
 
 tool(
   "unity_set_material",
-  "Material ozelliklerini toplu degistirir. properties objesinde: [r,g,b,a] -> renk, sayi -> float, string -> texture asset yolu. Ornek: {\"_Color\": [1,0,0,1], \"_Glossiness\": 0.2, \"_MainTex\": \"Assets/Textures/wood.png\"}. Dogru property adlari icin once unity_get_material cagir.",
+  "Sets several material properties at once. In the properties object: [r,g,b,a] -> color, number -> float, string -> texture asset path. Example: {\"_Color\": [1,0,0,1], \"_Glossiness\": 0.2, \"_MainTex\": \"Assets/Textures/wood.png\"}. Call unity_get_material first for the exact property names.",
   {
-    path: z.string().describe("Material asset yolu"),
+    path: z.string().describe("Material asset path"),
     properties: z.record(z.any()).optional(),
-    shader: z.string().optional().describe("Shader'i degistirmek icin"),
+    shader: z.string().optional().describe("To change the shader"),
   },
   "set_material"
 );
 
 tool(
   "unity_get_material",
-  "Material'in shader'ini ve tum property'lerini (adlari, tipleri, mevcut degerleri) dondurur.",
+  "Returns a material's shader and all of its properties (names, types, current values).",
   { path: z.string() },
   "get_material"
 );
@@ -285,17 +285,17 @@ tool(
 // ---------------- v2: SCRIPTABLEOBJECT / ASSET ----------------
 tool(
   "unity_create_scriptable_object",
-  "ScriptableObject asset'i olusturur (tip once unity_create_script ile tanimlanmis ve derlenmis olmali). Alanlarini doldurmak icin unity_set_property'yi assetPath parametresiyle cagir.",
+  "Creates a ScriptableObject asset (the type must already be defined via unity_create_script and compiled). Use unity_set_property with the assetPath parameter to fill its fields.",
   {
-    typeName: z.string().describe("SO sinif adi, orn: 'EnemyData'"),
-    assetPath: z.string().describe("orn: 'Data/Goblin' (.asset otomatik eklenir)"),
+    typeName: z.string().describe("ScriptableObject class name, e.g. 'EnemyData'"),
+    assetPath: z.string().describe("e.g. 'Data/Goblin' (.asset added automatically)"),
   },
   "create_scriptable_object"
 );
 
 tool(
   "unity_get_asset",
-  "Herhangi bir asset'in (ScriptableObject, prefab vb.) serialize edilmis ozelliklerini ve alt-asset'lerini (sprite atlas iceriği gibi) dondurur.",
+  "Returns the serialized properties and sub-assets (such as sprite atlas contents) of any asset (ScriptableObject, prefab, ...).",
   { assetPath: z.string() },
   "get_asset"
 );
@@ -303,65 +303,65 @@ tool(
 // ---------------- v2: COKLU SAHNE ----------------
 tool(
   "unity_list_scenes",
-  "Yuklu sahneleri (aktif/dirty durumlariyla) ve projedeki tum sahne dosyalarini listeler.",
+  "Lists loaded scenes (with their active/dirty state) and every scene file in the project.",
   {},
   "list_scenes"
 );
 
 tool(
   "unity_open_scene",
-  "Sahne acar. additive=true ile mevcut sahnelerin yanina yukler (coklu sahne duzenleme).",
+  "Opens a scene. With additive=true it loads alongside the currently open scenes (multi-scene editing).",
   {
-    path: z.string().describe("orn: 'Assets/Scenes/Level1.unity'"),
+    path: z.string().describe("e.g. 'Assets/Scenes/Level1.unity'"),
     additive: z.boolean().optional(),
-    saveCurrent: z.boolean().optional().describe("Acmadan once mevcutlari kaydet (varsayilan true)"),
+    saveCurrent: z.boolean().optional().describe("Save currently open scenes first (default true)"),
   },
   "open_scene"
 );
 
 tool(
   "unity_new_scene",
-  "Yeni sahne olusturur. savePath verilirse hemen diske kaydeder.",
+  "Creates a new scene. Saves it to disk immediately if savePath is given.",
   {
-    savePath: z.string().optional().describe("orn: 'Scenes/MainMenu' (.unity otomatik)"),
+    savePath: z.string().optional().describe("e.g. 'Scenes/MainMenu' (.unity added automatically)"),
     additive: z.boolean().optional(),
-    empty: z.boolean().optional().describe("true: tamamen bos; false: kamera+isikla (varsayilan)"),
+    empty: z.boolean().optional().describe("true: completely empty; false: with camera + light (default)"),
   },
   "new_scene"
 );
 
 tool(
   "unity_close_scene",
-  "Yuklu bir sahneyi kapatir (en az bir sahne acik kalmali).",
-  { path: z.string().describe("Sahne yolu veya adi"), save: z.boolean().optional() },
+  "Closes a loaded scene (at least one scene must stay open).",
+  { path: z.string().describe("Scene path or name"), save: z.boolean().optional() },
   "close_scene"
 );
 
 tool(
   "unity_set_active_scene",
-  "Aktif sahneyi degistirir (yeni nesneler aktif sahneye eklenir).",
-  { path: z.string().describe("Sahne yolu veya adi") },
+  "Changes the active scene (new objects are added to the active scene).",
+  { path: z.string().describe("Scene path or name") },
   "set_active_scene"
 );
 
 // ---------------- v2: PREFAB MODU ----------------
 tool(
   "unity_open_prefab",
-  "Prefab'i duzenleme modunda acar. Actiktan sonra tum nesne/component/property komutlari prefabin ICINDE calisir. Bitince unity_close_prefab cagirmayi unutma.",
-  { assetPath: z.string().describe("orn: 'Assets/Prefabs/Enemy.prefab'") },
+  "Opens a prefab in edit mode. While it is open, all object/component/property commands operate INSIDE the prefab. Remember to call unity_close_prefab when done.",
+  { assetPath: z.string().describe("e.g. 'Assets/Prefabs/Enemy.prefab'") },
   "open_prefab"
 );
 
 tool(
   "unity_save_prefab",
-  "Prefab modundaki degisiklikleri asset'e kaydeder (mod acik kalir).",
+  "Saves prefab-mode changes back to the asset (stays in prefab mode).",
   {},
   "save_prefab"
 );
 
 tool(
   "unity_close_prefab",
-  "Prefab modundan cikar. save=false verilmezse degisiklikleri kaydeder.",
+  "Leaves prefab mode. Saves the changes unless save=false.",
   { save: z.boolean().optional() },
   "close_prefab"
 );
@@ -393,14 +393,14 @@ server.registerTool(
         ],
       };
     } catch (e) {
-      return { content: [{ type: "text", text: "HATA: " + e.message }], isError: true };
+      return { content: [{ type: "text", text: "ERROR: " + e.message }], isError: true };
     }
   }
 );
 
 tool(
   "unity_execute_menu",
-  "Unity menu komutunu calistirir, orn: 'GameObject/Light/Directional Light', 'File/Save Project'. Diger tool'larin kapsamadigi isler icin.",
+  "Runs a Unity menu command, e.g. 'GameObject/Light/Directional Light', 'File/Save Project'. For anything the other tools do not cover.",
   { path: z.string() },
   "execute_menu"
 );
@@ -408,35 +408,35 @@ tool(
 // ---------------- v2.1: PREFAB / BUILD ----------------
 tool(
   "unity_save_as_prefab",
-  "Sahnedeki bir GameObject'i yeni bir prefab asset olarak kaydeder.",
+  "Saves a GameObject from the scene as a new prefab asset.",
   {
     instanceId: z.number().optional(),
     path: z.string().optional(),
-    savePath: z.string().describe("orn: 'Prefabs/Enemy' (.prefab otomatik eklenir)"),
+    savePath: z.string().describe("e.g. 'Prefabs/Enemy' (.prefab added automatically)"),
   },
   "save_as_prefab"
 );
 
 tool(
   "unity_set_build_settings_scenes",
-  "Build Settings sahne listesini verilen sahnelerle degistirir (hepsi etkin/enabled).",
-  { scenes: z.array(z.string()).describe("Sahne asset yollari, orn ['Assets/Scenes/Menu.unity', 'Assets/Scenes/Level1.unity']") },
+  "Replaces the Build Settings scene list with the given scenes (all enabled).",
+  { scenes: z.array(z.string()).describe("Scene asset paths, e.g. ['Assets/Scenes/Menu.unity', 'Assets/Scenes/Level1.unity']") },
   "set_build_settings_scenes"
 );
 
 // ---------------- v3: PLAY MODE ----------------
 tool("unity_play", "Enters Play mode. Call unity_get_play_state FIRST - invoking this while already playing toggles the mode and wastes a reload. A domain reload follows, so wait briefly before sending further commands (menu items invoked during the load are dropped).", {}, "play");
-tool("unity_stop", "Play mode'dan cikar (oyunu durdurur).", {}, "stop");
+tool("unity_stop", "Exits Play mode (stops the game).", {}, "stop");
 tool(
   "unity_pause",
-  "Play mode'u duraklatir/devam ettirir. 'paused' verilmezse mevcut durumu tersine cevirir.",
+  "Pauses or resumes Play mode. Toggles the current state if 'paused' is omitted.",
   { paused: z.boolean().optional() },
   "pause"
 );
-tool("unity_step", "Play mode'da bir kare ilerletir (duraklatilmisken faydali).", {}, "step");
+tool("unity_step", "Advances Play mode by one frame (useful while paused).", {}, "step");
 tool(
   "unity_get_play_state",
-  "Editor durumunu dondurur: isPlaying, isPaused, isCompiling, isUpdating. Play mode'a girdikten/ciktiktan sonra durumu dogrulamak icin kullan.",
+  "Returns editor state: isPlaying, isPaused, isCompiling, isUpdating. Call it before unity_play, and to confirm the state after entering or leaving Play mode.",
   {},
   "get_play_state"
 );
@@ -444,13 +444,13 @@ tool(
 // ---------------- v3: TEXTURE / SPRITE IMPORT ----------------
 tool(
   "unity_set_texture_import_settings",
-  "Bir texture/sprite dosyasinin import ayarlarini degistirir ve yeniden import eder. 2D icin en onemlileri: textureType='Sprite', spriteMode='Single'|'Multiple', pixelsPerUnit, filterMode='Point' (pixel art icin net kenarlar).",
+  "Changes a texture/sprite file's import settings and reimports it. The ones that matter most for 2D: textureType='Sprite', spriteMode='Single'|'Multiple', pixelsPerUnit, filterMode='Point' (crisp edges for pixel art).",
   {
-    assetPath: z.string().describe("orn: 'Assets/Sprites/hero.png'"),
+    assetPath: z.string().describe("e.g. 'Assets/Sprites/hero.png'"),
     textureType: z.enum(["Default", "NormalMap", "Sprite", "Cursor", "Cookie", "Lightmap", "SingleChannel"]).optional(),
     spriteMode: z.enum(["Single", "Multiple", "Polygon"]).optional(),
     pixelsPerUnit: z.number().optional(),
-    filterMode: z.enum(["Point", "Bilinear", "Trilinear"]).optional().describe("Pixel art icin 'Point'"),
+    filterMode: z.enum(["Point", "Bilinear", "Trilinear"]).optional().describe("'Point' for pixel art"),
     wrapMode: z.enum(["Repeat", "Clamp", "Mirror", "MirrorOnce"]).optional(),
     maxTextureSize: z.number().optional(),
     compression: z.enum(["Uncompressed", "Compressed", "CompressedHQ", "CompressedLQ"]).optional(),
@@ -461,38 +461,38 @@ tool(
 // ---------------- v3: TILEMAP ----------------
 tool(
   "unity_create_tilemap",
-  "Sahneye bir Grid + Tilemap (TilemapRenderer'li) olusturur. Donen tilemapInstanceId'yi unity_set_tiles icin kullan.",
+  "Creates a Grid + Tilemap (with a TilemapRenderer) in the scene. Pass the returned tilemapInstanceId to unity_set_tiles.",
   {
-    name: z.string().optional().describe("Grid nesnesi adi (varsayilan 'Grid')"),
-    tilemapName: z.string().optional().describe("Tilemap cocugunun adi (varsayilan 'Tilemap')"),
+    name: z.string().optional().describe("Grid object name (default 'Grid')"),
+    tilemapName: z.string().optional().describe("Name of the Tilemap child (default 'Tilemap')"),
   },
   "create_tilemap"
 );
 
 tool(
   "unity_create_tile_asset",
-  "Bir sprite'tan Tile asset'i olusturur (Tilemap'e yerlestirmek icin gereken kaynak). Atlas alt-asset'i icin 'Assets/atlas.png#Tile_0' bicimini kullan.",
+  "Creates a Tile asset from a sprite (required before placing it on a Tilemap). For an atlas sub-asset use the 'Assets/atlas.png#Tile_0' form.",
   {
-    sprite: z.string().describe("Sprite spec, orn 'Assets/Tiles/grass.png' veya 'Assets/atlas.png#grass'"),
-    assetPath: z.string().describe("orn: 'Tiles/Grass' (.asset otomatik eklenir)"),
-    color: z.array(z.number()).min(3).max(4).optional().describe("[r,g,b] veya [r,g,b,a]"),
+    sprite: z.string().describe("Sprite spec, e.g. 'Assets/Tiles/grass.png' or 'Assets/atlas.png#grass'"),
+    assetPath: z.string().describe("e.g. 'Tiles/Grass' (.asset added automatically)"),
+    color: z.array(z.number()).min(3).max(4).optional().describe("[r,g,b] or [r,g,b,a]"),
   },
   "create_tile_asset"
 );
 
 tool(
   "unity_set_tiles",
-  "Bir Tilemap uzerinde hucrelere tile yerlestirir. Ortak bir tileAssetPath verebilir ya da her hucrede ayri belirtebilirsin. Once unity_create_tile_asset ile Tile olustur.",
+  "Places tiles into cells of a Tilemap. Give one shared tileAssetPath, or a tile per cell. Create the Tile first with unity_create_tile_asset.",
   {
-    instanceId: z.number().optional().describe("Tilemap component'i olan nesnenin instanceId'si"),
+    instanceId: z.number().optional().describe("instanceId of the object holding the Tilemap component"),
     path: z.string().optional(),
-    tileAssetPath: z.string().optional().describe("Tum hucreler icin ortak Tile asset yolu"),
+    tileAssetPath: z.string().optional().describe("Shared Tile asset path for all cells"),
     cells: z.array(z.object({
       x: z.number(),
       y: z.number(),
       z: z.number().optional(),
-      tileAssetPath: z.string().optional().describe("Bu hucreye ozel Tile (ortak olani ezer)"),
-    })).describe("Yerlestirilecek hucreler listesi"),
+      tileAssetPath: z.string().optional().describe("Tile for this cell (overrides the shared one)"),
+    })).describe("List of cells to fill"),
   },
   "set_tiles"
 );
@@ -500,46 +500,46 @@ tool(
 // ---------------- v3: ANIMATION / ANIMATOR ----------------
 tool(
   "unity_create_sprite_animation",
-  "Sprite kareleri dizisinden 2D sprite animasyon klip'i (.anim) olusturur (SpriteRenderer sprite curve'u). Karakter yuruyus/kosma gibi frame-by-frame animasyonlar icin.",
+  "Creates a 2D sprite animation clip (.anim) from a sequence of sprite frames (a SpriteRenderer sprite curve). For frame-by-frame animation such as character walk/run.",
   {
-    assetPath: z.string().describe("orn: 'Animations/Hero_Run' (.anim otomatik)"),
-    sprites: z.array(z.string()).describe("Sirali sprite spec listesi, orn ['Assets/hero.png#run_0', 'Assets/hero.png#run_1', ...]"),
-    frameRate: z.number().optional().describe("Kare/sn, varsayilan 12"),
-    loop: z.boolean().optional().describe("Varsayilan true"),
+    assetPath: z.string().describe("e.g. 'Animations/Hero_Run' (.anim added automatically)"),
+    sprites: z.array(z.string()).describe("Ordered list of sprite specs, e.g. ['Assets/hero.png#run_0', 'Assets/hero.png#run_1', ...]"),
+    frameRate: z.number().optional().describe("Frames per second, default 12"),
+    loop: z.boolean().optional().describe("Default true"),
   },
   "create_sprite_animation"
 );
 
 tool(
   "unity_create_animation_clip",
-  "Genel animasyon klip'i olusturur: bir veya daha cok property'ye float curve. Orn Transform pozisyonunu/olcegini veya bir renk kanalini zamanla degistir.",
+  "Creates a general animation clip: float curves on one or more properties. E.g. animate a Transform's position/scale or a color channel over time.",
   {
-    assetPath: z.string().describe("orn: 'Animations/DoorOpen' (.anim otomatik)"),
-    frameRate: z.number().optional().describe("Varsayilan 60"),
+    assetPath: z.string().describe("e.g. 'Animations/DoorOpen' (.anim added automatically)"),
+    frameRate: z.number().optional().describe("Default 60"),
     loop: z.boolean().optional(),
     curves: z.array(z.object({
-      type: z.string().describe("Component tipi, orn 'Transform', 'SpriteRenderer'"),
-      path: z.string().optional().describe("Hedef cocuk nesnenin yolu (bos = kok)"),
-      property: z.string().describe("Serialize property yolu, orn 'm_LocalPosition.x', 'm_LocalScale.y'"),
-      keys: z.array(z.object({ time: z.number(), value: z.number() })).describe("Keyframe'ler (saniye, deger)"),
-    })).describe("En az bir curve"),
+      type: z.string().describe("Component type, e.g. 'Transform', 'SpriteRenderer'"),
+      path: z.string().optional().describe("Path of the target child object (empty = root)"),
+      property: z.string().describe("Serialized property path, e.g. 'm_LocalPosition.x', 'm_LocalScale.y'"),
+      keys: z.array(z.object({ time: z.number(), value: z.number() })).describe("Keyframes (time in seconds, value)"),
+    })).describe("At least one curve"),
   },
   "create_animation_clip"
 );
 
 tool(
   "unity_create_animator_controller",
-  "Animator Controller olusturur: state'ler (klip'lerle), parametreler ve gecisler. Sonra unity_assign_animator_controller ile bir nesneye ata.",
+  "Creates an Animator Controller: states (with clips), parameters and transitions. Then assign it to an object with unity_assign_animator_controller.",
   {
-    assetPath: z.string().describe("orn: 'Animators/Hero' (.controller otomatik)"),
+    assetPath: z.string().describe("e.g. 'Animators/Hero' (.controller added automatically)"),
     parameters: z.array(z.object({
       name: z.string(),
       type: z.enum(["Float", "Int", "Bool", "Trigger"]),
     })).optional(),
     states: z.array(z.object({
       name: z.string(),
-      clip: z.string().optional().describe("AnimationClip asset yolu (.anim)"),
-      default: z.boolean().optional().describe("Baslangic (default) state'i mi"),
+      clip: z.string().optional().describe("AnimationClip asset path (.anim)"),
+      default: z.boolean().optional().describe("Is this the default state"),
     })).optional(),
     transitions: z.array(z.object({
       from: z.string(),
@@ -558,11 +558,11 @@ tool(
 
 tool(
   "unity_assign_animator_controller",
-  "Bir Animator Controller'i sahnedeki nesneye atar (Animator component'i yoksa otomatik ekler).",
+  "Assigns an Animator Controller to an object in the scene (adds an Animator component if missing).",
   {
     instanceId: z.number().optional(),
     path: z.string().optional(),
-    controllerPath: z.string().describe("orn: 'Assets/Animators/Hero.controller'"),
+    controllerPath: z.string().describe("e.g. 'Assets/Animators/Hero.controller'"),
   },
   "assign_animator_controller"
 );
@@ -570,21 +570,21 @@ tool(
 // ---------------- v4: ANIMATOR (blend tree / sub-state machine) ----------------
 tool(
   "unity_create_blend_tree",
-  "Var olan bir Animator Controller'a blend tree'li bir state ekler. blendType='Simple1D' (tek parametre) ya da 2D varyantlari. Eksik blend parametreleri Float olarak otomatik eklenir.",
+  "Adds a state with a blend tree to an existing Animator Controller. blendType='Simple1D' (single parameter) or a 2D variant. Missing blend parameters are added automatically as Float.",
   {
-    controllerPath: z.string().describe("orn: 'Assets/Animators/Hero.controller'"),
-    name: z.string().optional().describe("State adi (varsayilan 'BlendTree')"),
+    controllerPath: z.string().describe("e.g. 'Assets/Animators/Hero.controller'"),
+    name: z.string().optional().describe("State name (default 'BlendTree')"),
     layer: z.number().optional(),
     blendType: z.enum(["Simple1D", "SimpleDirectional2D", "FreeformDirectional2D", "FreeformCartesian2D", "Direct"]).optional(),
-    blendParameter: z.string().optional().describe("1D icin blend parametresi (varsayilan 'Blend')"),
-    blendParameterX: z.string().optional().describe("2D X parametresi"),
-    blendParameterY: z.string().optional().describe("2D Y parametresi"),
-    default: z.boolean().optional().describe("Bu state default olsun mu"),
+    blendParameter: z.string().optional().describe("Blend parameter for 1D (default 'Blend')"),
+    blendParameterX: z.string().optional().describe("2D X parameter"),
+    blendParameterY: z.string().optional().describe("2D Y parameter"),
+    default: z.boolean().optional().describe("Make this the default state"),
     children: z.array(z.object({
-      clip: z.string().describe("AnimationClip asset yolu"),
-      threshold: z.number().optional().describe("1D esik degeri"),
-      x: z.number().optional().describe("2D X konumu"),
-      y: z.number().optional().describe("2D Y konumu"),
+      clip: z.string().describe("AnimationClip asset path"),
+      threshold: z.number().optional().describe("1D threshold value"),
+      x: z.number().optional().describe("2D X position"),
+      y: z.number().optional().describe("2D Y position"),
     })).optional(),
   },
   "create_blend_tree"
@@ -592,10 +592,10 @@ tool(
 
 tool(
   "unity_add_animator_sub_state_machine",
-  "Bir Animator Controller'in katmanina alt-state machine ekler (kendi state'leri, default'u ve ic gecisleriyle).",
+  "Adds a sub-state machine to a layer of an Animator Controller (with its own states, default state and internal transitions).",
   {
     controllerPath: z.string(),
-    name: z.string().optional().describe("Alt-state machine adi"),
+    name: z.string().optional().describe("Sub-state machine name"),
     layer: z.number().optional(),
     states: z.array(z.object({
       name: z.string(),
@@ -620,13 +620,13 @@ tool(
 // ---------------- v4: RULE TILE ----------------
 tool(
   "unity_create_rule_tile",
-  "Otomatik-döşenen (auto-tiling) bir RuleTile asset'i olusturur. com.unity.2d.tilemap.extras paketi gerekir. Her kural: bir sprite + 8 komsu maskesi (0=herhangi, 1=bu tile olmali, 2=bu tile olmamali).",
+  "Creates an auto-tiling RuleTile asset. Requires the com.unity.2d.tilemap.extras package. Each rule: one sprite + a mask of 8 neighbours (0=any, 1=must be this tile, 2=must not be this tile).",
   {
-    assetPath: z.string().describe("orn: 'Tiles/GroundRule' (.asset otomatik)"),
-    defaultSprite: z.string().optional().describe("Hicbir kural uymazsa kullanilacak sprite"),
+    assetPath: z.string().describe("e.g. 'Tiles/GroundRule' (.asset added automatically)"),
+    defaultSprite: z.string().optional().describe("Sprite used when no rule matches"),
     rules: z.array(z.object({
-      sprite: z.string().describe("Bu kural uydugunda gosterilecek sprite"),
-      neighbors: z.array(z.number()).length(8).describe("8 komsu: [SolUst, Ust, SagUst, Sol, Sag, SolAlt, Alt, SagAlt] — her biri 0/1/2"),
+      sprite: z.string().describe("Sprite shown when this rule matches"),
+      neighbors: z.array(z.number()).length(8).describe("8 neighbours: [TopLeft, Top, TopRight, Left, Right, BottomLeft, Bottom, BottomRight] - each 0/1/2"),
     })).optional(),
   },
   "create_rule_tile"
@@ -635,7 +635,7 @@ tool(
 // ---------------- v4: PARTICLE SYSTEM ----------------
 tool(
   "unity_create_particle_system",
-  "Yeni bir ParticleSystem olusturur (ya da var olan nesneye ekler) ve yaygin ayarlari yapar. instanceId/path verilirse o nesneye eklenir; yoksa yeni GameObject olusturulur.",
+  "Creates a new ParticleSystem (or adds one to an existing object) and applies common settings. If instanceId/path is given it is added to that object; otherwise a new GameObject is created.",
   {
     name: z.string().optional(),
     instanceId: z.number().optional(),
@@ -645,12 +645,12 @@ tool(
     startLifetime: z.number().optional(),
     startSpeed: z.number().optional(),
     startSize: z.number().optional(),
-    startColor: z.array(z.number()).min(3).max(4).optional().describe("[r,g,b] veya [r,g,b,a]"),
+    startColor: z.array(z.number()).min(3).max(4).optional().describe("[r,g,b] or [r,g,b,a]"),
     gravityModifier: z.number().optional(),
     maxParticles: z.number().optional(),
-    rateOverTime: z.number().optional().describe("Saniyede emit edilen parcacik sayisi"),
+    rateOverTime: z.number().optional().describe("Particles emitted per second"),
     shapeType: z.enum(["Sphere", "Hemisphere", "Cone", "Box", "Circle", "Edge", "Rectangle"]).optional(),
-    material: z.string().optional().describe("Material asset yolu"),
+    material: z.string().optional().describe("Material asset path"),
   },
   "create_particle_system"
 );
@@ -658,39 +658,39 @@ tool(
 // ---------------- v4: TERRAIN ----------------
 tool(
   "unity_create_terrain",
-  "Yeni bir Terrain (+ TerrainData asset) olusturur.",
+  "Creates a new Terrain (+ TerrainData asset).",
   {
-    assetPath: z.string().optional().describe("TerrainData yolu (varsayilan 'Terrain/TerrainData')"),
+    assetPath: z.string().optional().describe("TerrainData path (default 'Terrain/TerrainData')"),
     name: z.string().optional(),
-    heightmapResolution: z.number().optional().describe("2^n+1 olmali (33, 65, …, 513, 1025). Varsayilan 513"),
-    width: z.number().optional().describe("Varsayilan 500"),
-    height: z.number().optional().describe("Maksimum yukseklik, varsayilan 600"),
-    length: z.number().optional().describe("Varsayilan 500"),
+    heightmapResolution: z.number().optional().describe("Must be 2^n+1 (33, 65, ..., 513, 1025). Default 513"),
+    width: z.number().optional().describe("Default 500"),
+    height: z.number().optional().describe("Maximum height, default 600"),
+    length: z.number().optional().describe("Default 500"),
   },
   "create_terrain"
 );
 
 tool(
   "unity_set_terrain_heights",
-  "Bir Terrain'in yukseklik haritasini ayarlar. uniform: tum arazi tek yukseklik (0-1). heights: 2B normalize dizi (0-1), arazi cozunurlugune yeniden orneklenir.",
+  "Sets a Terrain's heightmap. uniform: a single height for the whole terrain (0-1). heights: a normalized 2D array (0-1), resampled to the terrain resolution.",
   {
     instanceId: z.number().optional(),
     path: z.string().optional(),
-    uniform: z.number().optional().describe("0-1 arasi duz yukseklik"),
-    heights: z.array(z.array(z.number())).optional().describe("2B yukseklik dizisi (her deger 0-1)"),
+    uniform: z.number().optional().describe("Flat height, 0-1"),
+    heights: z.array(z.array(z.number())).optional().describe("2D height array (each value 0-1)"),
   },
   "set_terrain_heights"
 );
 
 tool(
   "unity_add_terrain_layer",
-  "Bir Terrain'e texture katmani (TerrainLayer) ekler.",
+  "Adds a texture layer (TerrainLayer) to a Terrain.",
   {
     instanceId: z.number().optional(),
     path: z.string().optional(),
-    texture: z.string().describe("Diffuse texture asset yolu"),
-    assetPath: z.string().optional().describe("TerrainLayer yolu (varsayilan 'Terrain/Layer')"),
-    tileSize: z.array(z.number()).length(2).optional().describe("[x,y] döşeme boyutu"),
+    texture: z.string().describe("Diffuse texture asset path"),
+    assetPath: z.string().optional().describe("TerrainLayer path (default 'Terrain/Layer')"),
+    tileSize: z.array(z.number()).length(2).optional().describe("[x,y] tile size"),
   },
   "add_terrain_layer"
 );
