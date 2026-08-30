@@ -6,9 +6,9 @@
 ![License](https://img.shields.io/badge/license-MIT-3DA639)
 ![No API key](https://img.shields.io/badge/API%20key-not%20required-orange)
 
-![NEON SURVIVORS, built through this bridge](docs/demo.gif)
+![A game UI being built through the bridge](docs/build-demo.gif)
 
-> *NEON SURVIVORS — sprites, audio, ~7,400 lines of C# and every scene, built end-to-end by an agent through this bridge.*
+> *A complete game UI assembled from scratch through these tools — panels, buttons, dropdowns and scroll views placed one by one, then every controller reference wired automatically. Real time: under a minute.*
 
 Drive the Unity Editor from **Claude Code**, **Cursor**, **Windsurf**, **Antigravity** or any MCP client: see the scene, create/move/delete objects, edit components and their properties, place prefabs, write C# scripts and fix their compile errors, control **Play mode**, and build **tilemaps**, **animations**, **blend trees**, **particle systems** and **terrains** — all from natural language. **No API key, no account, no Python** — one C# file plus Node, working with your existing subscription.
 
@@ -286,6 +286,11 @@ The startup line reports what is live: `[unity-mcp] ready — Unity 127.0.0.1:64
 | `unity_execute_menu` | Run any Unity menu command |
 
 ### Example prompts
+
+![NEON SURVIVORS](docs/demo.gif)
+
+> *And the other direction — NEON SURVIVORS: sprites, audio, ~7,400 lines of C# and every scene, built end-to-end by an agent through this bridge.*
+
 
 - "Look at the scene, lay out a 5×5 grid of cubes on the ground, add a Rigidbody to each."
 - "Write a PlayerController script, add it to Player, and fix any compile errors."
