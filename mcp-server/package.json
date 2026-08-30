@@ -1,5 +1,5 @@
 {
-  "name": "unity-mcp-bridge",
+  "name": "@canakbass/unity-mcp-bridge",
   "version": "5.0.0",
   "description": "Unity Editor MCP bridge for Claude Code, Cursor, Windsurf and any MCP client. 52 tools (scene, scripts, play mode, tilemap, animation, particles, terrain), built for low token cost: selectable tool groups, incremental console reads, isolated screenshots.",
   "type": "module",
@@ -29,5 +29,9 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/canakbass/unity-mcp.git"
-  }
+  },
+  "files": [
+    "server.js",
+    "README.md"
+  ]
 }
