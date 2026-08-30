@@ -49,7 +49,47 @@ function callUnity(method, params = {}) {
   });
 }
 
-const server = new McpServer({ name: "unity-bridge", version: "1.0.0" });
+// Server-level guidance. The MCP `instructions` field is returned in the
+// initialize response, so EVERY client (Claude Code, Cursor, Windsurf, Cline,
+// Antigravity, ...) receives it - not just one editor's rules file.
+const INSTRUCTIONS = `Unity Editor bridge: these tools drive a LIVE Unity Editor over TCP.
+
+COST — screenshots and console dumps are by far the most expensive calls here:
+
+1. unity_capture_screenshot is for VISUAL checks only (UI layout, sprite look,
+   effects). For logic or data verification do NOT screenshot: write a report to
+   a file from an editor script and read that file instead. It is far cheaper and
+   gives exact values instead of a guess from pixels.
+2. Always call unity_read_console with a small limit (5) and type:"Error".
+   A runtime exception repeats every frame, so extra entries add no information.
+3. Prefer unity_get_object over unity_get_scene when one object is enough;
+   get_scene returns the entire hierarchy.
+4. Read and write C# with your own filesystem tools, not through Unity. Then
+   compile with ONE unity_execute_menu "Assets/Refresh".
+5. Batch several edits and test once. Avoid a play/stop cycle per small change.
+
+PLAY MODE:
+- Call unity_get_play_state BEFORE unity_play. Calling play while already
+  playing toggles the mode and wastes a full reload.
+- Never edit or compile scripts while in play mode. Unity performs a domain
+  reload: static singletons reset while Awake is NOT called again, so managers
+  and pooled objects silently become null. Stop play mode first.
+- After entering play mode, wait a moment before sending commands; menu items
+  invoked during the load are dropped.
+
+RELIABLE LOOP:
+  write file -> unity_execute_menu "Assets/Refresh"
+  -> unity_read_console (type:"Error", limit:5) -> fix -> repeat
+  -> only then unity_play.
+
+The bridge runs on the Unity main thread, so a long-running or infinite loop in
+an editor script will freeze the whole editor and every tool call will time out.
+Always bound loops in editor scripts you write.`;
+
+const server = new McpServer(
+  { name: "unity-bridge", version: "1.0.0" },
+  { instructions: INSTRUCTIONS }
+);
 
 function textResult(data) {
   return { content: [{ type: "text", text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }] };
@@ -70,7 +110,7 @@ const vec3 = z.array(z.number()).length(3);
 // ---------------- SAHNE OKUMA ----------------
 tool(
   "unity_get_scene",
-  "Yuklu TUM sahnelerin hiyerarsisini dondurur (nesneler, instanceId'ler, pozisyonlar, component listeleri). Prefab modu acikken prefabin icerigini dondurur. Degisiklik yapmadan once mutlaka cagir.",
+  "Returns the hierarchy of ALL loaded scenes (objects, instanceIds, positions, component lists). Returns prefab contents while in prefab mode. Can be large on big scenes - prefer unity_get_object when a single object is enough.",
   {},
   "get_scene"
 );
@@ -201,7 +241,7 @@ tool(
 // ---------------- DURUM / KONTROL ----------------
 tool(
   "unity_read_console",
-  "Unity konsolundaki son loglari dondurur. Script yazdiktan veya islem yaptiktan sonra hata kontrolu icin cagir. type: Error | Warning | Log",
+  "Returns recent Unity console entries. Call after writing scripts or running an action to check for errors. ALWAYS pass limit (5 is usually enough) and type:\"Error\" - a runtime exception repeats every frame, so a large dump costs many tokens without adding information.",
   {
     limit: z.number().optional(),
     type: z.enum(["Error", "Warning", "Log"]).optional(),
@@ -331,11 +371,11 @@ server.registerTool(
   "unity_capture_screenshot",
   {
     description:
-      "Sahnenin goruntusunu PNG olarak alir ve gorsel olarak dondurur — yaptigin degisikligi GOZLE dogrulamak icin kullan (ozellikle UI yerlesimi ve 2D sahnelerde). view: 'game' ana kameradan render alir (Screen Space Overlay canvas'lar dahil), 'scene' Scene View kamerasindan alir.",
+      "Returns a PNG of the scene as an image the model can see. EXPENSIVE (~2k tokens per call): use it ONLY for VISUAL verification - UI layout, sprite appearance, effects. For logic or numeric verification write a report file from an editor script and read that instead. view: 'game' renders from the main camera (includes Screen Space Overlay canvases), 'scene' renders from the Scene View camera.",
     inputSchema: {
-      view: z.enum(["game", "scene"]).optional().describe("Varsayilan: game"),
-      width: z.number().optional().describe("Varsayilan 960, max 1920"),
-      height: z.number().optional().describe("Varsayilan 540, max 1080"),
+      view: z.enum(["game", "scene"]).optional().describe("Default: game"),
+      width: z.number().optional().describe("Default 960, max 1920"),
+      height: z.number().optional().describe("Default 540, max 1080"),
     },
   },
   async (args) => {
@@ -385,7 +425,7 @@ tool(
 );
 
 // ---------------- v3: PLAY MODE ----------------
-tool("unity_play", "Editor'u Play mode'a sokar (oyunu baslatir). Not: domain reload olabileceginden hemen ardindan gelen komutlar icin kisa bekleme gerekebilir.", {}, "play");
+tool("unity_play", "Enters Play mode. Call unity_get_play_state FIRST - invoking this while already playing toggles the mode and wastes a reload. A domain reload follows, so wait briefly before sending further commands (menu items invoked during the load are dropped).", {}, "play");
 tool("unity_stop", "Play mode'dan cikar (oyunu durdurur).", {}, "stop");
 tool(
   "unity_pause",

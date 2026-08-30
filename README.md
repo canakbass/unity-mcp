@@ -14,6 +14,31 @@ Let **Claude Code** and **Antigravity** drive the Unity Editor directly: see the
 
 Describe what you want in plain language and an AI agent builds it inside Unity — laying out UI, wiring components, generating scripts and fixing their compile errors, arranging 2D levels, and **verifying the result visually via screenshots the model can actually see.** Work that takes hours by hand often takes minutes.
 
+### Guidance for AI agents
+
+The server sends a usage guide in the MCP `instructions` field on `initialize`,
+so **every** client receives it — Claude Code, Cursor, Windsurf, Cline,
+Antigravity — without any per-editor rules file.
+
+[`AGENTS.md`](AGENTS.md) repeats the same guidance for clients that ignore that
+field. The short version:
+
+- **Screenshots are for visual checks only** (~2k tokens each). To verify logic
+  or numbers, have an editor script write `Logs/report.txt` and read the file —
+  cheaper and exact.
+- **Always bound the console:** `unity_read_console` with `type:"Error"` and
+  `limit:5`. A runtime exception repeats every frame.
+- **Check `unity_get_play_state` before `unity_play`** — calling play while
+  already playing toggles the mode.
+- **Never compile while in play mode.** Unity domain-reloads: statics reset but
+  `Awake` is not called again, so singletons and pools become `null` with no
+  compile error. Make managers resolve lazily to survive it.
+- **Bound every loop in editor scripts** — the bridge runs on Unity's main
+  thread, so an infinite loop freezes the editor and times out every tool call.
+- Expose debug actions as `[MenuItem]` entries: they give an agent deterministic
+  control over runtime state, since the bridge cannot simulate input.
+
+
 ### Architecture
 
 ```
