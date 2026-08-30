@@ -42,9 +42,21 @@ namespace McpUnity
         static readonly ConcurrentQueue<Pending> Queue = new ConcurrentQueue<Pending>();
 
         // ---- Konsol log yakalama ----
-        class LogEntry { public string type; public string message; public string stack; public string time; }
+        class LogEntry
+        {
+            public long seq;            // artan sira no: artimli okuma (since) icin
+            public string type;
+            public string message;
+            public string stack;
+            public string time;
+            public int count = 1;       // ayni log arka arkaya tekrarladiysa kac kez
+        }
+
         static readonly List<LogEntry> Logs = new List<LogEntry>();
         const int MaxLogs = 500;
+
+        static long _logSeq;            // simdiye kadar uretilen son sira no
+        static long _logDropped;        // tampon tasmasi yuzunden dusen kayit sayisi
 
         static McpBridge()
         {
@@ -56,16 +68,36 @@ namespace McpUnity
 
         static void OnLog(string message, string stack, LogType type)
         {
+            string t = type.ToString();
+            bool keepStack = type == LogType.Error || type == LogType.Exception;
+
             lock (Logs)
             {
+                // Ayni istisna her karede tekrar edebiliyor. Ust uste gelen ayni
+                // kaydi cogaltmak yerine sayacini artiriyoruz: 20 ayni stack trace
+                // yerine tek kayit + count.
+                if (Logs.Count > 0)
+                {
+                    var last = Logs[Logs.Count - 1];
+                    if (last.type == t && last.message == message)
+                    {
+                        last.count++;
+                        last.time = DateTime.Now.ToString("HH:mm:ss");
+                        last.seq = ++_logSeq;      // yine de "yeni" sayilsin
+                        return;
+                    }
+                }
+
                 Logs.Add(new LogEntry
                 {
-                    type = type.ToString(),
+                    seq = ++_logSeq,
+                    type = t,
                     message = message,
-                    stack = type == LogType.Error || type == LogType.Exception ? stack : null,
+                    stack = keepStack ? stack : null,
                     time = DateTime.Now.ToString("HH:mm:ss")
                 });
-                if (Logs.Count > MaxLogs) Logs.RemoveAt(0);
+
+                if (Logs.Count > MaxLogs) { Logs.RemoveAt(0); _logDropped++; }
             }
         }
 
@@ -174,6 +206,7 @@ namespace McpUnity
                 case "get_scene": return GetScene();
                 case "get_object": return GetObject(p);
                 case "create_object": return CreateObject(p);
+                case "create_objects": return CreateObjects(p);
                 case "delete_object": return DeleteObject(p);
                 case "set_transform": return SetTransform(p);
                 case "add_component": return AddComponent(p);
@@ -501,6 +534,56 @@ namespace McpUnity
             return new JObject { ["name"] = go.name, ["instanceId"] = GetIID(go) };
         }
 
+        /// <summary>
+        /// Tek cagride N nesne olusturur. Sahne kurarken onlarca ayri tur yerine
+        /// bir tur yeterli olur; her nesne icin ayri Undo kaydi tutulur.
+        /// items: [{name, primitive?, parent?, position?, rotation?, scale?}, ...]
+        /// Ortak alanlar 'shared' ile bir kez verilebilir; item kendi degeriyle ezer.
+        /// </summary>
+        static JToken CreateObjects(JObject p)
+        {
+            var items = p["items"] as JArray;
+            if (items == null || items.Count == 0) throw new Exception("items bos");
+
+            var shared = p["shared"] as JObject;
+            var created = new JArray();
+            var failed = new JArray();
+
+            for (int i = 0; i < items.Count; i++)
+            {
+                var raw = items[i] as JObject;
+                if (raw == null) continue;
+
+                // shared + item birlestir (item onceligi)
+                var merged = shared != null ? (JObject)shared.DeepClone() : new JObject();
+                foreach (var prop in raw.Properties()) merged[prop.Name] = prop.Value;
+
+                try
+                {
+                    created.Add(CreateObject(merged));
+                }
+                catch (Exception e)
+                {
+                    // Tek bir basarisiz oge tum grubu dusurmesin: hangisinin neden
+                    // basarisiz oldugunu dondur, digerleri olusmaya devam etsin.
+                    failed.Add(new JObject
+                    {
+                        ["index"] = i,
+                        ["name"] = (string)merged["name"],
+                        ["error"] = e.Message,
+                    });
+                }
+            }
+
+            return new JObject
+            {
+                ["created"] = created,
+                ["createdCount"] = created.Count,
+                ["failed"] = failed,
+                ["failedCount"] = failed.Count,
+            };
+        }
+
         static JToken DeleteObject(JObject p)
         {
             var go = ResolveGameObject(p);
@@ -648,16 +731,43 @@ namespace McpUnity
         static JToken ReadConsole(JObject p)
         {
             int limit = p["limit"] != null ? (int)p["limit"] : 30;
-            string filter = (string)p["type"]; // "Error", "Warning", "Log" veya null
+            string filter = (string)p["type"];               // "Error" | "Warning" | "Log" | null
             bool clear = p["clear"] != null && (bool)p["clear"];
+            long since = p["since"] != null ? (long)p["since"] : -1;   // -1 = bastan oku
+
             lock (Logs)
             {
                 var q = Logs.AsEnumerable();
-                if (!string.IsNullOrEmpty(filter)) q = q.Where(l => l.type == filter || (filter == "Error" && l.type == "Exception"));
-                var items = q.Reverse().Take(limit).Reverse()
-                    .Select(l => (JToken)new JObject { ["time"] = l.time, ["type"] = l.type, ["message"] = l.message, ["stack"] = l.stack });
-                var result = new JArray(items);
-                if (clear) Logs.Clear();
+
+                // Artimli okuma: yalnizca bu sira nodan SONRAKI kayitlar.
+                // Ayni hatalari tekrar tekrar okumayi onler.
+                if (since >= 0) q = q.Where(l => l.seq > since);
+
+                if (!string.IsNullOrEmpty(filter))
+                    q = q.Where(l => l.type == filter || (filter == "Error" && l.type == "Exception"));
+
+                var picked = q.Reverse().Take(limit).Reverse().ToList();
+
+                var entries = new JArray(picked.Select(l => (JToken)new JObject
+                {
+                    ["seq"] = l.seq,
+                    ["time"] = l.time,
+                    ["type"] = l.type,
+                    ["message"] = l.message,
+                    ["stack"] = l.stack,
+                    ["count"] = l.count,
+                }));
+
+                var result = new JObject
+                {
+                    ["entries"] = entries,
+                    ["cursor"] = _logSeq,                 // bir sonraki cagriya 'since' olarak ver
+                    ["returned"] = picked.Count,
+                    ["matched"] = q.Count(),              // filtreye uyan toplam (limit oncesi)
+                    ["dropped"] = _logDropped > 0,        // tampon tasmasi oldu mu
+                };
+
+                if (clear) { Logs.Clear(); _logDropped = 0; }
                 return result;
             }
         }

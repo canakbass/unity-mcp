@@ -31,18 +31,35 @@ System.IO.File.WriteAllText("Logs/report.txt", sb.ToString());
 This is cheaper **and** more precise. Verifying "which weapon dealt the most
 damage" by reading `sectorDamage=1395` beats squinting at a health bar.
 
-### 2. Always bound `unity_read_console`
+### 2. Read the console incrementally
 
 ```json
-{ "type": "Error", "limit": 5 }
+{ "type": "Error", "limit": 5 }                 // first call
+{ "type": "Error", "limit": 5, "since": 23 }    // then: only what is new
 ```
 
-A runtime exception repeats **every frame**. Without a limit, one
-NullReferenceException can return dozens of identical stack traces.
+The response is `{ entries, cursor, returned, matched, dropped }`. Pass the
+returned `cursor` back as `since` and you get **only new entries** — no
+re-reading the same errors after every fix.
+
+Identical consecutive messages are collapsed into one entry with a `count`,
+so a per-frame exception no longer floods the result:
+
+```
+seq=21  count=20  NullReferenceException ...   ← 20 occurrences, one entry
+```
+
+`dropped: true` means the buffer overflowed and some entries were lost.
 
 ### 3. Prefer `unity_get_object` over `unity_get_scene`
 
 `get_scene` serialises every object in every loaded scene.
+
+### 3b. Build scenes with one call
+
+`unity_create_objects` creates many objects at once. Put fields common to all
+of them in `shared`; each item overrides what it needs. One bad item does not
+abort the rest — the result reports `created` and `failed` separately.
 
 ### 4. Edit code with your own file tools
 

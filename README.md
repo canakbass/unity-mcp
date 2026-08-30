@@ -26,8 +26,12 @@ field. The short version:
 - **Screenshots are for visual checks only** (~2k tokens each). To verify logic
   or numbers, have an editor script write `Logs/report.txt` and read the file —
   cheaper and exact.
-- **Always bound the console:** `unity_read_console` with `type:"Error"` and
-  `limit:5`. A runtime exception repeats every frame.
+- **Read the console incrementally:** pass the `cursor` from the previous
+  `unity_read_console` call back as `since` to get only new entries. Repeated
+  identical messages are collapsed into one entry with a `count`, so a
+  per-frame exception no longer floods the result.
+- **Create scenes in one call:** `unity_create_objects` builds many objects at
+  once, with shared defaults and per-item overrides.
 - **Check `unity_get_play_state` before `unity_play`** — calling play while
   already playing toggles the mode.
 - **Never compile while in play mode.** Unity domain-reloads: statics reset but

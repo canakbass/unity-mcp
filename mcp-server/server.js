@@ -61,12 +61,16 @@ COST — screenshots and console dumps are by far the most expensive calls here:
    a file from an editor script and read that file instead. It is far cheaper and
    gives exact values instead of a guess from pixels.
 2. Always call unity_read_console with a small limit (5) and type:"Error".
-   A runtime exception repeats every frame, so extra entries add no information.
+   Repeated identical messages are already collapsed with a 'count'. After the
+   first read, pass the returned 'cursor' back as 'since' to fetch ONLY new
+   entries - this is the cheapest way to poll and avoids re-reading old errors.
 3. Prefer unity_get_object over unity_get_scene when one object is enough;
    get_scene returns the entire hierarchy.
 4. Read and write C# with your own filesystem tools, not through Unity. Then
    compile with ONE unity_execute_menu "Assets/Refresh".
 5. Batch several edits and test once. Avoid a play/stop cycle per small change.
+6. Building a scene? Use unity_create_objects once instead of calling
+   unity_create_object in a loop.
 
 PLAY MODE:
 - Call unity_get_play_state BEFORE unity_play. Calling play while already
@@ -138,6 +142,29 @@ tool(
     scale: vec3.optional(),
   },
   "create_object"
+);
+
+tool(
+  "unity_create_objects",
+  "Creates MANY GameObjects in ONE call - use this instead of calling unity_create_object in a loop when building a scene. " +
+  "Fields common to every item can be given once in `shared`; each item overrides them. " +
+  "A failing item does not abort the rest: the result reports { created, createdCount, failed, failedCount }.",
+  {
+    items: z.array(z.object({
+      name: z.string().optional(),
+      primitive: z.enum(["Cube", "Sphere", "Capsule", "Cylinder", "Plane", "Quad"]).optional(),
+      parent: z.union([z.string(), z.number()]).optional(),
+      position: vec3.optional(),
+      rotation: vec3.optional(),
+      scale: vec3.optional(),
+    })).describe("One entry per object to create"),
+    shared: z.object({
+      primitive: z.enum(["Cube", "Sphere", "Capsule", "Cylinder", "Plane", "Quad"]).optional(),
+      parent: z.union([z.string(), z.number()]).optional(),
+      scale: vec3.optional(),
+    }).optional().describe("Defaults applied to every item (each item can override)"),
+  },
+  "create_objects"
 );
 
 tool(
@@ -241,11 +268,15 @@ tool(
 // ---------------- DURUM / KONTROL ----------------
 tool(
   "unity_read_console",
-  "Returns recent Unity console entries. Call after writing scripts or running an action to check for errors. ALWAYS pass limit (5 is usually enough) and type:\"Error\" - a runtime exception repeats every frame, so a large dump costs many tokens without adding information.",
+  "Returns recent Unity console entries. Call after writing scripts or running an action to check for errors.\n" +
+  "Returns { entries, cursor, returned, matched, dropped }. Identical consecutive messages are collapsed into one entry with a `count`, so a per-frame exception no longer floods the result.\n" +
+  "INCREMENTAL READ: pass the `cursor` from the previous call as `since` to get ONLY what is new. This is the cheapest way to poll after an action - use it instead of re-reading the whole buffer.\n" +
+  "Always pass `type` (usually \"Error\") and a small `limit`. `dropped:true` means the buffer overflowed and some entries were lost.",
   {
-    limit: z.number().optional(),
-    type: z.enum(["Error", "Warning", "Log"]).optional(),
-    clear: z.boolean().optional(),
+    limit: z.number().optional().describe("Max entries to return (default 30). Keep it small."),
+    type: z.enum(["Error", "Warning", "Log"]).optional().describe("Filter by severity; \"Error\" also includes exceptions"),
+    since: z.number().optional().describe("Return only entries newer than this sequence number - pass the `cursor` from the previous call"),
+    clear: z.boolean().optional().describe("Clear the buffer after reading"),
   },
   "read_console"
 );
